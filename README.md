@@ -182,6 +182,8 @@ bloxorz/
 
 levels/          # Các màn chơi
 tests/           # Kiểm thử
+tools/
+└── write_core_levels.py        # Tạo/đặt lại 10 levels
 ```
 
 ---
