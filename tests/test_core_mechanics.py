@@ -20,8 +20,9 @@ def test_level_loader() -> None:
     level = load_level(level_path)
 
     assert level.id == 1
-    assert level.name == "Core Intro"
-    assert level.grid[1] == "#S..G#"
+    assert level.name == "Core Platform"
+    assert sum(row.count("S") for row in level.grid) == 1
+    assert sum(row.count("G") for row in level.grid) == 1
 
 
 def test_board_start_goal() -> None:

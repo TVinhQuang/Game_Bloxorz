@@ -1,13 +1,20 @@
 {
   "id": 1,
-  "name": "Core Intro",
+  "name": "Core Platform",
   "difficulty": 1,
   "category": "core",
-  "description": "Simple straight-line level. Expected solution: RIGHT, RIGHT.",
+  "description": "A Bloxorz-style platform level. Expected shortest solution length: 11 moves.",
   "grid": [
-    "######",
-    "#S..G#",
-    "######"
+    "################",
+    "################",
+    "##S.....########",
+    "##......########",
+    "##..........####",
+    "#######......###",
+    "#######..G...###",
+    "#######......###",
+    "################",
+    "################"
   ],
   "legend": {
     "#": "void",

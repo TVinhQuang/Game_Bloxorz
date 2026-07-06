@@ -1,18 +1,23 @@
 {
   "id": 2,
-  "name": "Core Turning",
+  "name": "Narrow Left Turn",
   "difficulty": 2,
   "category": "core",
-  "description": "Open board level requiring both horizontal and vertical rolling.",
+  "description": "A narrow turning route that requires careful orientation changes. Shortest: 15 moves.",
   "grid": [
-    "########",
-    "#......#",
-    "#.S....#",
-    "#......#",
-    "#......#",
-    "#....G.#",
-    "#......#",
-    "########"
+    "##############",
+    "##############",
+    "##...#########",
+    "##...#########",
+    "##G#.#########",
+    "##...#########",
+    "##...#########",
+    "##.#....######",
+    "##...##.....##",
+    "##...##....S##",
+    "#########...##",
+    "##############",
+    "##############"
   ],
   "legend": {
     "#": "void",

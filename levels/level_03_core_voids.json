@@ -1,17 +1,22 @@
 {
   "id": 3,
-  "name": "Core Voids",
+  "name": "Vertical Gate",
   "difficulty": 3,
   "category": "core",
-  "description": "Core level with more voids to test invalid move detection.",
+  "description": "A route with vertical gates and narrow safe areas. Shortest: 16 moves.",
   "grid": [
-    "###########",
-    "#S..#....##",
-    "#...#.....#",
-    "#.........#",
-    "###....#..#",
-    "#......#G.#",
-    "###########"
+    "############",
+    "############",
+    "#######...##",
+    "#####.....##",
+    "#####...####",
+    "#####.#.####",
+    "#####.#.####",
+    "#####.#.####",
+    "###...#.####",
+    "##S..##G####",
+    "############",
+    "############"
   ],
   "legend": {
     "#": "void",
