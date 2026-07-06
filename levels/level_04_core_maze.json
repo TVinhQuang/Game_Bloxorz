@@ -1,0 +1,27 @@
+{
+  "id": 4,
+  "name": "Core Maze",
+  "difficulty": 4,
+  "category": "core",
+  "description": "Larger core-only maze level for solver experiments.",
+  "grid": [
+    "############",
+    "#S.........#",
+    "#.####.....#",
+    "#....#.....#",
+    "#....#..####",
+    "#..........#",
+    "####..#....#",
+    "#.....#..G.#",
+    "############"
+  ],
+  "legend": {
+    "#": "void",
+    ".": "floor",
+    "S": "start",
+    "G": "goal"
+  },
+  "bridges": [],
+  "switches": [],
+  "split": null
+}

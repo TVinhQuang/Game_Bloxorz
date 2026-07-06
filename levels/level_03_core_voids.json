@@ -1,0 +1,25 @@
+{
+  "id": 3,
+  "name": "Core Voids",
+  "difficulty": 3,
+  "category": "core",
+  "description": "Core level with more voids to test invalid move detection.",
+  "grid": [
+    "###########",
+    "#S..#....##",
+    "#...#.....#",
+    "#.........#",
+    "###....#..#",
+    "#......#G.#",
+    "###########"
+  ],
+  "legend": {
+    "#": "void",
+    ".": "floor",
+    "S": "start",
+    "G": "goal"
+  },
+  "bridges": [],
+  "switches": [],
+  "split": null
+}

@@ -1,0 +1,26 @@
+{
+  "id": 2,
+  "name": "Core Turning",
+  "difficulty": 2,
+  "category": "core",
+  "description": "Open board level requiring both horizontal and vertical rolling.",
+  "grid": [
+    "########",
+    "#......#",
+    "#.S....#",
+    "#......#",
+    "#......#",
+    "#....G.#",
+    "#......#",
+    "########"
+  ],
+  "legend": {
+    "#": "void",
+    ".": "floor",
+    "S": "start",
+    "G": "goal"
+  },
+  "bridges": [],
+  "switches": [],
+  "split": null
+}

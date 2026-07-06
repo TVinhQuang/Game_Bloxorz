@@ -1,0 +1,21 @@
+{
+  "id": 1,
+  "name": "Core Intro",
+  "difficulty": 1,
+  "category": "core",
+  "description": "Simple straight-line level. Expected solution: RIGHT, RIGHT.",
+  "grid": [
+    "######",
+    "#S..G#",
+    "######"
+  ],
+  "legend": {
+    "#": "void",
+    ".": "floor",
+    "S": "start",
+    "G": "goal"
+  },
+  "bridges": [],
+  "switches": [],
+  "split": null
+}
