@@ -1,8 +1,9 @@
+# main.py
 from bloxorz.gui.app import run_app
 
 
 def main() -> None:
-    # Chạy desktop GUI bằng Pygame.
+    # Chỉ cần gọi hàm trống như thế này thôi nhé
     run_app()
 
 

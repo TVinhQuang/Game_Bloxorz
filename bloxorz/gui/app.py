@@ -8,9 +8,11 @@ from bloxorz.core.movement import compute_next_state
 
 import pygame
 
+
 from bloxorz.core.enums import Direction
 from bloxorz.core.game import BloxorzCoreGame
 from bloxorz.solvers.base import solver_not_implemented
+from bloxorz.advanced.advanced_rules import AdvancedRuleExtension
 
 from . import theme
 from .buttons import Button
@@ -272,10 +274,13 @@ class BloxorzPygameApp:
         """
         Tạo game mới từ level index.
         """
-
         level_path = self.level_paths[level_index]
 
-        return BloxorzCoreGame.from_level_file(level_path)
+        # SỬA DÒNG NÀY: Truyền level_path vào hàm khởi tạo
+        return BloxorzCoreGame.from_level_file(
+            level_path, 
+            rule_extension=AdvancedRuleExtension(level_path)
+        )
 
     def create_buttons(self) -> list[Button]:
         """

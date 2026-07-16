@@ -1,15 +1,15 @@
 {
   "id": 1,
-  "name": "Core Platform",
+  "name": "Advanced Test Platform",
   "difficulty": 1,
-  "category": "core",
-  "description": "A Bloxorz-style platform level. Expected shortest solution length: 11 moves.",
+  "category": "advanced",
+  "description": "Màn chơi thử nghiệm: F (Dễ vỡ), X (Công tắc), B (Cầu đóng).",
   "grid": [
     "################",
     "################",
-    "##S.....########",
-    "##......########",
-    "##..........####",
+    "##S.F...########",
+    "##..X...########",
+    "##...B......####",
     "#######......###",
     "#######..G...###",
     "#######......###",
@@ -20,9 +20,27 @@
     "#": "void",
     ".": "floor",
     "S": "start",
-    "G": "goal"
+    "G": "goal",
+    "F": "fragile",
+    "X": "soft_switch",
+    "B": "bridge_closed"
   },
-  "bridges": [],
-  "switches": [],
+  "bridges": [
+    {
+      "r": 4,
+      "c": 5,
+      "initially_open": false
+    }
+  ],
+  "switches": [
+    {
+      "r": 3,
+      "c": 4,
+      "type": "soft",
+      "targets": [[4, 5]]
+    }
+  ],
   "split": null
+  
 }
+
