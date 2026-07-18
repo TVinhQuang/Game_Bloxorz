@@ -325,6 +325,28 @@ class Renderer:
                 theme.COLOR_START_RIGHT,
             )
 
+        # ====================================================
+        # BỔ SUNG: ĐỊNH NGHĨA MÀU SẮC CHO CÁC Ô NÂNG CAO TẠI ĐÂY
+        # ====================================================
+        if cell == "F":      # Fragile (Dễ vỡ): Màu Đỏ Cam nhạt
+            return ((240, 130, 130), (200, 90, 90), (220, 110, 110))
+            
+        if cell == "X":      # Soft Switch (Công tắc nhẹ): Màu Vàng Chanh
+            return ((255, 235, 60), (210, 190, 40), (235, 215, 50))
+            
+        if cell == "O":      # Heavy Switch (Công tắc nặng): Màu Cam Đậm
+            return ((255, 150, 50), (210, 110, 30), (235, 130, 40))
+            
+        if cell == "B":      # Bridge Closed (Cầu đang đóng): Màu Xám Đen Tối
+            return ((80, 85, 90), (55, 60, 65), (65, 70, 75))
+        # ====================================================
+        # Thêm màu này vào nhóm màu nâng cao bạn vừa viết ở bước trước:
+        if cell == "BO":     # Cầu đã mở: Tô giống hệt màu sàn gạch bình thường
+            return (
+                theme.COLOR_TILE_TOP,
+                theme.COLOR_TILE_LEFT,
+                theme.COLOR_TILE_RIGHT,
+            )
         return (
             theme.COLOR_TILE_TOP,
             theme.COLOR_TILE_LEFT,
@@ -419,11 +441,17 @@ class Renderer:
     ) -> None:
         """
         Vẽ một tile pseudo-3D.
-
-        screen_y_offset dùng để tile rơi xuống dưới màn hình.
         """
-
         cell = board.cell_at(r, c)
+
+        # ====================================================
+        # BỔ SUNG: Nếu là ô cầu 'B' và đã được mở trong logic, đổi trạng thái vẽ sang 'BO'
+        # ====================================================
+        if cell == "B" and hasattr(board, "rule_extension"):
+            rule_ext = board.rule_extension
+            if rule_ext.bridge_states.get((r, c), False):
+                cell = "BO"
+        # ====================================================
 
         top_color, left_color, right_color = self.get_tile_colors(cell)
 
@@ -467,11 +495,15 @@ class Renderer:
             width=1,
         )
 
-        if cell in (Board.START, Board.GOAL):
+        # Cho phép vẽ nhãn chữ cho cả các ô nâng cao
+        if cell in (Board.START, Board.GOAL, "F", "X", "O", "B"):
+            # Nếu là ô nền sáng (Vàng/Đỏ), ta dùng chữ màu tối (30,30,30) cho dễ đọc
+            text_color = (30, 30, 30) if cell in ("X", "F") else theme.COLOR_TEXT
+
             label_surface = self.small_font.render(
                 cell,
                 True,
-                theme.COLOR_TEXT,
+                text_color,
             )
 
             label_rect = label_surface.get_rect(
