@@ -6,7 +6,6 @@ Lý do tách riêng:
 - renderer.py và app.py không bị ngập bởi hằng số giao diện.
 """
 
-
 # =========================
 # Window layout
 # =========================
@@ -151,3 +150,29 @@ COLOR_BLOCK_EDGE = (185, 125, 80)
 
 COLOR_BLOCK_HIGHLIGHT = (185, 120, 75)
 COLOR_BLOCK_DARK_STAIN = (45, 32, 28)
+
+# Thời gian chờ sau khi thắng trước khi tự động sang level tiếp theo.
+AUTO_NEXT_LEVEL_DELAY = 1.2
+
+# ---------------- LEVEL TRANSITION ----------------
+
+# Thời gian màn hình tối dần sau khi hoàn thành level.
+LEVEL_TRANSITION_FADE_OUT_DURATION = 0.6
+
+# Thời gian giữ chữ LEVEL COMPLETE.
+LEVEL_COMPLETE_HOLD_DURATION = 1.0
+
+# Thời gian giữ tên level mới.
+NEXT_LEVEL_HOLD_DURATION = 1.2
+
+# Thời gian level mới hiện dần lên.
+LEVEL_TRANSITION_FADE_IN_DURATION = 1
+
+# Màu lớp phủ khi chuyển level.
+LEVEL_TRANSITION_OVERLAY_COLOR = (8, 10, 16)
+
+# Màu tiêu đề chuyển màn.
+LEVEL_TRANSITION_TITLE_COLOR = (245, 185, 75)
+
+# Màu mô tả level.
+LEVEL_TRANSITION_SUBTITLE_COLOR = (225, 225, 230)

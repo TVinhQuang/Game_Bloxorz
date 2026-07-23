@@ -1,74 +1,82 @@
+from __future__ import annotations
+
 import time
 import tracemalloc
 from collections import deque
 
-from bloxorz.solvers.base import SolverResult
 from bloxorz.core.game import BloxorzCoreGame
+from bloxorz.core.state import BlockState
+from bloxorz.solvers.base import SolverResult
 
-def canonicalize(state):
+
+def state_key(game: BloxorzCoreGame, state: BlockState) -> tuple:
     """
-    Hàm chuẩn hóa trạng thái: Vì khối Bloxorz không phân biệt đầu đuôi (viên 1 và viên 2 giống nhau),
-    nếu ta không sắp xếp lại tọa độ, máy tính sẽ hiểu (A, B) và (B, A) là 2 trạng thái khác nhau.
-    Hàm này giúp đưa tọa độ về 1 chuẩn duy nhất để so sánh và lưu vào tập 'visited'.
+    Chuyển state thành key hashable cho visited.
+
+    Core hiện trả:
+        (r, c, orientation)
+
+    Sau này nếu Advanced bổ sung bridge state,
+    encode_state() có thể đưa thêm dữ liệu vào key.
     """
-    cube1, cube2, bridge_status, active_cube = state
-    sorted_cubes = sorted([cube1, cube2])
-    return (tuple(sorted_cubes[0]), tuple(sorted_cubes[1]), bridge_status, active_cube)
+
+    return game.encode_state(state).to_tuple()
+
 
 def solve_bfs(game: BloxorzCoreGame) -> SolverResult:
-    # Bắt đầu tính giờ và bật bộ đo RAM của Python
-    start_time = time.time()
-    tracemalloc.start()
-    
-    expanded_nodes = 0 
-    
-    # Lấy trạng thái bắt đầu và vị trí đích từ game
-    initial_state = game.get_initial_state()
-    goal_pos = game.get_goal_position()
+    """
+    Breadth-First Search.
 
-    # Khởi tạo queue. Dùng deque của 'collections' để popleft() tốn O(1) thời gian
-    # Mỗi phần tử trong queue là 1 tuple chứa: (Trạng thái hiện tại, Lịch sử bước đi để tới đây)
-    queue = deque([(initial_state, [])])
-    
-    # Tập hợp (set) 'visited' dùng để ghi nhớ những trạng thái đã đi qua nhằm tránh lặp vòng.
-    visited = {canonicalize(initial_state)}
+    BFS mở rộng các node theo độ sâu tăng dần.
+    Khi mọi move có cost bằng nhau, BFS tìm được lời giải ngắn nhất
+    theo số lượng move.
+    """
+
+    start_time = time.perf_counter()
+    tracemalloc.start()
+
+    expanded_nodes = 0
+
+    # Bắt đầu tìm kiếm từ vị trí hiện tại của người chơi,
+    # không bắt buộc quay về Start.
+    initial_state = game.state
+
+    # Mỗi phần tử gồm:
+    # (state hiện tại, đường đi tới state đó)
+    frontier = deque([(initial_state, [])])
+
+    # Đánh dấu reached ngay khi đưa state vào frontier.
+    reached = {state_key(game, initial_state)}
 
     success = False
     solution = []
 
-    # Vòng lặp chính: Cứ tiếp tục tìm kiếm chừng nào hàng đợi chưa rỗng
-    while queue:
-        # Lấy phần tử ở đầu hàng đợi ra
-        curr_state, path = queue.popleft()
+    while frontier:
+        current_state, path = frontier.popleft()
         expanded_nodes += 1
 
-        # KIỂM TRA ĐÍCH
-        # Khối Bloxorz rơi xuống lỗ đích khi 2 tọa độ cube1 và cube2 trùng nhau
-        cube1, cube2 = curr_state[0], curr_state[1]
-        if cube1 == cube2 and cube1 == goal_pos:
+        # Goal test.
+        if game.is_goal_state(current_state):
             success = True
             solution = path
-            break # Dừng thuật toán vì đã tìm thấy đường đi
+            break
 
-        # SINH CÁC TRẠNG THÁI KẾ TIẾP
-        # xem từ trạng thái hiện tại, khối có thể lăn đi những hướng nào hợp lệ
-        for next_state, action in game.get_successors(curr_state):
-            # Chuẩn hóa trạng thái mới sinh ra
-            norm_next = canonicalize(next_state)
-            
-            # Nếu trạng thái này chưa được sinh ra trước đây
-            if norm_next not in visited:
-                visited.add(norm_next)
-                
-                # Đẩy trạng thái mới vào cuối hàng đợi, kèm theo lịch sử bước đi cộng thêm hành động vừa làm
-                queue.append((next_state, path + [action]))
+        # Sinh successor bằng chính Core engine.
+        for successor in game.successors(current_state):
+            next_state = successor.state
+            action = successor.action
+            next_key = state_key(game, next_state)
 
-    # Tính toán thời gian và đo lượng RAM lớn nhất đã tiêu thụ
-    search_time = time.time() - start_time
+            if next_key in reached:
+                continue
+
+            reached.add(next_key)
+            frontier.append((next_state, path + [action]))
+
+    search_time = time.perf_counter() - start_time
     _, peak_memory = tracemalloc.get_traced_memory()
     tracemalloc.stop()
 
-    # Đóng gói và trả về object cấu trúc chuẩn theo yêu cầu của dự án
     return SolverResult(
         algorithm="BFS",
         success=success,
@@ -77,6 +85,9 @@ def solve_bfs(game: BloxorzCoreGame) -> SolverResult:
         memory_usage=peak_memory,
         expanded_nodes=expanded_nodes,
         solution_length=len(solution),
-        message="BFS found a solution!" if success else "BFS failed to find a solution."
+        message=(
+            "BFS found a solution."
+            if success
+            else "BFS could not find a solution."
+        ),
     )
-

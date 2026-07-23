@@ -8,15 +8,20 @@ from bloxorz.core.movement import compute_next_state
 
 import pygame
 
-
 from bloxorz.core.enums import Direction
 from bloxorz.core.game import BloxorzCoreGame
-from bloxorz.solvers.base import solver_not_implemented
-from bloxorz.advanced.advanced_rules import AdvancedRuleExtension
 
 from . import theme
 from .buttons import Button
 from .renderer import Renderer
+
+from bloxorz.solvers import (
+    solve_astar,
+    solve_bfs,
+    solve_dfs,
+    solve_ucs,
+)
+from bloxorz.solvers.base import SolverResult
 
 
 class BloxorzPygameApp:
@@ -120,6 +125,295 @@ class BloxorzPygameApp:
         # Tạo danh sách button.
         self.buttons = self.create_buttons()
         
+        # Queue chứa solution do solver trả về.
+        self.solver_action_queue: list[Direction] = []
+
+        # Có đang tự động phát lời giải hay không.
+        self.is_solver_playback = False
+
+        # Kết quả solver gần nhất để hiển thị metrics.
+        self.last_solver_result: SolverResult | None = None
+        
+        # True khi người chơi hoặc solver vừa hoàn thành level.
+        self.auto_level_advance_pending = False
+
+        # Thời điểm bắt đầu đếm thời gian chờ chuyển level.
+        # Giá trị 0 nghĩa là chưa bắt đầu đếm.
+        self.auto_level_advance_start_time = 0
+        
+        # ---------------- LEVEL TRANSITION ----------------
+
+        # Phase hiện tại:
+        # None       = không chuyển màn
+        # "fade_out" = màn hình đang tối dần
+        # "hold"     = giữ màn hình tối
+        # "fade_in"  = level mới đang hiện dần lên
+        self.level_transition_phase: str | None = None
+
+        # Thời điểm bắt đầu phase hiện tại.
+        self.level_transition_start_time = 0
+
+        # Alpha của lớp phủ chuyển màn.
+        self.level_transition_alpha = 0
+
+        # Index của level sẽ được load.
+        self.transition_target_level_index: int | None = None
+
+        # Nội dung chữ hiện trên màn chuyển level.
+        self.transition_title = ""
+        self.transition_subtitle = ""
+        
+    def is_level_transition_active(self) -> bool:
+        """
+        Kiểm tra app có đang thực hiện hiệu ứng chuyển level không.
+        """
+
+        return self.level_transition_phase is not None
+    
+    def transition_smoothstep(self, t: float) -> float:
+        """
+        Làm chuyển động fade mềm hơn nội suy tuyến tính.
+
+        Input và output đều trong đoạn [0, 1].
+        """
+
+        t = max(0.0, min(1.0, t))
+
+        return t * t * (3.0 - 2.0 * t)
+    
+    def start_level_transition(self, target_level_index: int) -> None:
+        """
+        Bắt đầu hiệu ứng chuyển sang một level khác.
+
+        Level chưa được load ngay.
+        Ta đợi màn hình fade-out hoàn toàn rồi mới load,
+        nhờ đó người chơi không nhìn thấy board đổi đột ngột.
+        """
+
+        # Không bắt đầu thêm một transition nếu transition khác đang chạy.
+        if self.is_level_transition_active():
+            return
+
+        # Bảo vệ index.
+        if not 0 <= target_level_index < len(self.level_paths):
+            return
+
+        self.transition_target_level_index = target_level_index
+
+        self.level_transition_phase = "fade_out"
+        self.level_transition_start_time = pygame.time.get_ticks()
+        self.level_transition_alpha = 0
+
+        # Trong lúc fade-out, hiển thị level vừa hoàn thành.
+        self.transition_title = "LEVEL COMPLETE"
+        self.transition_subtitle = (
+            f"Level {self.game.board.id}: {self.game.board.name}"
+        )
+
+        # Không nhận input cũ trong lúc chuyển màn.
+        self.clear_animation_and_input_queue()
+        self.clear_solver_playback()
+        
+    def load_level_immediately(self, level_index: int) -> None:
+        """
+        Load một level ngay lập tức.
+
+        Hàm này chỉ dùng bên trong transition.
+        Không tự tạo thêm transition mới.
+        """
+
+        self.current_level_index = level_index
+        self.game = self.create_game(level_index)
+
+        self.clear_animation_and_input_queue()
+        self.clear_solver_playback()
+
+        self.last_solver_result = None
+
+        self.message = f"Loaded level {self.game.board.id}."
+        self.message_type = "info"
+        
+    def update_level_transition(self) -> None:
+        """
+        Cập nhật hiệu ứng chuyển level theo ba phase:
+
+        1. fade_out:
+        Level cũ tối dần.
+
+        2. hold:
+        Load level mới và giữ màn hình tối.
+
+        3. fade_in:
+        Level mới hiện dần lên.
+        """
+
+        if not self.is_level_transition_active():
+            return
+
+        now = pygame.time.get_ticks()
+
+        elapsed_seconds = (
+            now - self.level_transition_start_time
+        ) / 1000.0
+
+        # ---------------- FADE OUT ----------------
+        if self.level_transition_phase == "fade_out":
+            duration = theme.LEVEL_TRANSITION_FADE_OUT_DURATION
+
+            t = elapsed_seconds / duration
+            eased_t = self.transition_smoothstep(t)
+
+            self.level_transition_alpha = int(255 * eased_t)
+
+            if t >= 1.0:
+                self.level_transition_alpha = 255
+
+                # Chưa load level mới ngay.
+                # Giữ chữ LEVEL COMPLETE trước.
+                self.level_transition_phase = "hold_complete"
+                self.level_transition_start_time = now
+
+            return
+
+        # ---------------- HOLD ----------------
+        if self.level_transition_phase == "hold_complete":
+            self.level_transition_alpha = 255
+
+            if elapsed_seconds >= theme.LEVEL_COMPLETE_HOLD_DURATION:
+                target_index = self.transition_target_level_index
+
+                if target_index is None:
+                    self.finish_level_transition()
+                    return
+
+                # Sau khi đã giữ LEVEL COMPLETE đủ lâu,
+                # mới load level tiếp theo.
+                self.load_level_immediately(target_index)
+
+                # Đổi chữ sang thông tin level mới.
+                self.transition_title = f"LEVEL {self.game.board.id}"
+                self.transition_subtitle = self.game.board.name
+
+                self.level_transition_phase = "hold_next"
+                self.level_transition_start_time = now
+
+            return
+        
+        if self.level_transition_phase == "hold_next":
+            self.level_transition_alpha = 255
+
+            if elapsed_seconds >= theme.NEXT_LEVEL_HOLD_DURATION:
+                self.level_transition_phase = "fade_in"
+                self.level_transition_start_time = now
+
+            return
+
+        # ---------------- FADE IN ----------------
+        if self.level_transition_phase == "fade_in":
+            duration = theme.LEVEL_TRANSITION_FADE_IN_DURATION
+
+            t = elapsed_seconds / duration
+            eased_t = self.transition_smoothstep(t)
+
+            self.level_transition_alpha = int(
+                255 * (1.0 - eased_t)
+            )
+
+            if t >= 1.0:
+                self.finish_level_transition()
+
+            return
+        
+    def finish_level_transition(self) -> None:
+        """
+        Đưa app về trạng thái chơi bình thường sau transition.
+        """
+
+        self.level_transition_phase = None
+        self.level_transition_start_time = 0
+        self.level_transition_alpha = 0
+        self.transition_target_level_index = None
+        self.transition_title = ""
+        self.transition_subtitle = ""
+
+        self.message = (
+            f"Level {self.game.board.id}: "
+            f"{self.game.board.name}"
+        )
+        self.message_type = "info"
+    
+    def schedule_auto_level_advance(self) -> None:
+        """
+        Đánh dấu rằng level hiện tại đã hoàn thành.
+
+        Đồng hồ chưa bắt đầu ngay vì cần đợi animation
+        của nước thắng chạy xong.
+        """
+
+        self.auto_level_advance_pending = True
+        self.auto_level_advance_start_time = 0
+        
+    def cancel_auto_level_advance(self) -> None:
+        """
+        Hủy yêu cầu tự động chuyển level.
+
+        Dùng khi restart, chuyển level thủ công hoặc quit.
+        """
+
+        self.auto_level_advance_pending = False
+        self.auto_level_advance_start_time = 0
+        
+    def update_auto_level_advance(self) -> None:
+        """
+        Chuyển sang level tiếp theo sau khi:
+        - đã thắng;
+        - animation cuối đã hoàn tất;
+        - solver playback đã kết thúc;
+        - đã chờ đủ AUTO_NEXT_LEVEL_DELAY.
+        """
+
+        if not self.auto_level_advance_pending:
+            return
+
+        # Phải đợi animation nước cuối kết thúc.
+        if self.is_animating:
+            return
+
+        # Không chuyển level trong lúc đang chạy hiệu ứng rơi.
+        if self.is_fall_effect_active():
+            return
+
+        # Nếu solver còn action thì chưa kết thúc playback.
+        if self.is_solver_playback:
+            return
+
+        now = pygame.time.get_ticks()
+
+        # Bắt đầu đếm thời gian sau khi mọi animation hoàn tất.
+        if self.auto_level_advance_start_time == 0:
+            self.auto_level_advance_start_time = now
+            return
+
+        elapsed_seconds = (
+            now - self.auto_level_advance_start_time
+        ) / 1000.0
+
+        if elapsed_seconds < theme.AUTO_NEXT_LEVEL_DELAY:
+            return
+
+        # Xóa pending trước khi chuyển level để tránh gọi lặp.
+        self.cancel_auto_level_advance()
+
+        # Nếu đã ở level cuối cùng.
+        if self.current_level_index >= len(self.level_paths) - 1:
+            self.message = "Congratulations! All levels completed!"
+            self.message_type = "success"
+            return
+
+        next_level_index = self.current_level_index + 1
+        
+        self.start_level_transition(next_level_index)
+    
     def ease_in_quad(self, t: float) -> float:
         """
         Easing cho hiệu ứng rơi.
@@ -274,13 +568,10 @@ class BloxorzPygameApp:
         """
         Tạo game mới từ level index.
         """
+
         level_path = self.level_paths[level_index]
 
-        # SỬA DÒNG NÀY: Truyền level_path vào hàm khởi tạo
-        return BloxorzCoreGame.from_level_file(
-            level_path, 
-            rule_extension=AdvancedRuleExtension(level_path)
-        )
+        return BloxorzCoreGame.from_level_file(level_path)
 
     def create_buttons(self) -> list[Button]:
         """
@@ -330,9 +621,23 @@ class BloxorzPygameApp:
             self.update_animation()
             self.update_fall_effect()
 
-            if not self.is_fall_effect_active():
-                self.process_queued_input_if_possible()
+            # Chỉ phát solver/input khi không rơi và không chuyển level.
+            if (
+                not self.is_fall_effect_active()
+                and not self.is_level_transition_active()
+            ):
+                if self.is_solver_playback:
+                    self.process_solver_playback()
+                else:
+                    self.process_queued_input_if_possible()
 
+            # Kiểm tra có cần tự động sang level kế tiếp hay không.
+            self.update_auto_level_advance()
+            
+            # Update transition sau auto-next,
+            # vì auto-next có thể vừa bắt đầu transition trong frame này.
+            self.update_level_transition()
+            
             self.draw()
             self.clock.tick(theme.FPS)
 
@@ -374,10 +679,14 @@ class BloxorzPygameApp:
         """
         Xử lý keyboard input.
         """
-
-        # ESC để thoát.
+        
+        # ESC vẫn được phép thoát trong lúc chuyển màn.
         if key == pygame.K_ESCAPE:
             self.running = False
+            return
+
+        # Không nhận input gameplay trong lúc chuyển level.
+        if self.is_level_transition_active():
             return
 
         # R để restart.
@@ -423,7 +732,9 @@ class BloxorzPygameApp:
         """
         Xử lý click chuột vào button.
         """
-
+        if self.is_level_transition_active():
+            return
+    
         for button in self.buttons:
             if button.is_clicked(mouse_pos):
                 self.handle_button_action(button.action)
@@ -476,8 +787,15 @@ class BloxorzPygameApp:
         Nếu không animation:
             thực hiện move ngay.
         """
+        if self.is_level_transition_active():
+            return
         
         if self.is_fall_effect_active():
+            return
+        
+        if self.is_solver_playback:
+            self.message = "Solver playback is running."
+            self.message_type = "info"
             return
 
         if self.game.is_goal_state():
@@ -513,7 +831,8 @@ class BloxorzPygameApp:
         """
         Restart level hiện tại.
         """
-        
+        self.cancel_auto_level_advance()
+        self.clear_solver_playback()
         self.clear_animation_and_input_queue()
 
         self.game.reset()
@@ -522,50 +841,164 @@ class BloxorzPygameApp:
 
     def previous_level(self) -> None:
         """
-        Chuyển về level trước.
+        Chuyển về level trước bằng hiệu ứng fade.
         """
-        
-        self.clear_animation_and_input_queue()
+
+        if self.is_level_transition_active():
+            return
+
+        self.cancel_auto_level_advance()
 
         if self.current_level_index == 0:
             self.message = "Already at the first level."
             self.message_type = "error"
             return
 
-        self.current_level_index -= 1
-        self.game = self.create_game(self.current_level_index)
-        self.message = f"Loaded level {self.game.board.id}."
-        self.message_type = "info"
+        target_index = self.current_level_index - 1
+
+        self.start_level_transition(target_index)
 
     def next_level(self) -> None:
         """
-        Chuyển sang level tiếp theo.
+        Chuyển sang level tiếp theo bằng hiệu ứng fade.
         """
-        
-        self.clear_animation_and_input_queue()
+
+        if self.is_level_transition_active():
+            return
+
+        self.cancel_auto_level_advance()
 
         if self.current_level_index >= len(self.level_paths) - 1:
             self.message = "Already at the last level."
             self.message_type = "error"
             return
 
-        self.current_level_index += 1
-        self.game = self.create_game(self.current_level_index)
-        self.message = f"Loaded level {self.game.board.id}."
-        self.message_type = "info"
+        target_index = self.current_level_index + 1
+
+        self.start_level_transition(target_index)
 
     def handle_solver_button(self, algorithm: str) -> None:
         """
-        Stub cho solver button.
+        Chạy solver được chọn, sau đó tự động animate solution.
 
-        Sau này khi có solve_bfs, solve_dfs, solve_ucs, solve_astar,
-        ta sẽ thay phần này bằng lời gọi thuật toán thật.
+        Hiện tại solver giải từ initial state của level,
+        vì vậy trước khi playback ta reset game.
+        """
+                
+        if self.is_fall_effect_active():
+            return
+        
+        if self.game.is_goal_state():
+            self.message = "Level already completed."
+            self.message_type = "success"
+            return
+
+        if self.is_animating or self.is_solver_playback:
+            self.message = "Please wait for the current animation."
+            self.message_type = "error"
+            return
+
+        solver_map = {
+            "BFS": solve_bfs,
+            "DFS": solve_dfs,
+            "UCS": solve_ucs,
+            "A*": solve_astar,
+        }
+
+        solver_function = solver_map.get(algorithm)
+
+        if solver_function is None:
+            self.message = f"Unknown solver: {algorithm}"
+            self.message_type = "error"
+            return
+
+        # Xóa input thủ công còn chờ.
+        self.clear_animation_and_input_queue()
+        self.clear_solver_playback()
+
+        self.message = f"Running {algorithm}..."
+        self.message_type = "info"
+
+        # Vẽ thông báo trước khi bắt đầu tìm.
+        self.draw()
+
+        # Solver không làm thay đổi self.game.state.
+        result = solver_function(self.game)
+        self.last_solver_result = result
+
+        # In metrics ra terminal để dễ debug và dùng cho experiments.
+        print()
+        print(f"Algorithm       : {result.algorithm}")
+        print(f"Success         : {result.success}")
+        print(f"Solution length : {result.solution_length}")
+        print(f"Expanded nodes  : {result.expanded_nodes}")
+        print(f"Search time     : {result.search_time:.6f} seconds")
+        print(f"Peak memory     : {result.memory_usage / 1024:.2f} KB")
+        print(
+            "Solution        :",
+            [action.value for action in result.solution],
+        )
+
+        if not result.success:
+            self.message = result.message
+            self.message_type = "error"
+            return
+
+        # Solver đã tìm lời giải từ game.state hiện tại,
+        # vì vậy playback cũng phải bắt đầu từ đúng vị trí hiện tại.
+        self.solver_action_queue = list(result.solution)
+        self.is_solver_playback = True
+
+        self.message = (
+            f"{algorithm}: {result.solution_length} remaining moves, "
+            f"{result.expanded_nodes} nodes"
+        )
+        self.message_type = "success"
+        
+    def clear_solver_playback(self) -> None:
+        """
+        Hủy solution đang được phát.
         """
 
-        result = solver_not_implemented(algorithm)
+        self.solver_action_queue.clear()
+        self.is_solver_playback = False
+        
+    def process_solver_playback(self) -> None:
+        """
+        Mỗi khi animation hiện tại kết thúc,
+        lấy action tiếp theo trong solution để chạy.
+        """
 
-        self.message = result.message
-        self.message_type = "error"
+        if not self.is_solver_playback:
+            return
+
+        if self.is_animating:
+            return
+
+        if self.is_fall_effect_active():
+            return
+
+        # Hết action nghĩa là playback hoàn tất.
+        if not self.solver_action_queue:
+            self.is_solver_playback = False
+
+            if self.last_solver_result is not None:
+                result = self.last_solver_result
+
+                self.message = (
+                    f"{result.algorithm} solved: "
+                    f"{result.solution_length} moves, "
+                    f"{result.search_time:.4f}s"
+                )
+                self.message_type = "success"
+
+            return
+
+        direction = self.solver_action_queue.pop(0)
+
+        self.perform_move_with_animation(direction)
+        
+    
 
     def draw(self) -> None:
         """
@@ -614,6 +1047,15 @@ class BloxorzPygameApp:
             message_type=self.message_type,
             buttons=self.buttons,
         )
+        
+        # Vẽ transition overlay lên trên toàn bộ board và side panel.
+        if self.is_level_transition_active():
+            self.renderer.draw_level_transition(
+                surface=self.screen,
+                alpha=self.level_transition_alpha,
+                title=self.transition_title,
+                subtitle=self.transition_subtitle,
+            )
 
         pygame.display.flip()
         
@@ -639,8 +1081,14 @@ class BloxorzPygameApp:
         self.is_animating = True
 
         if result.won:
-            self.message = f"You win in {self.game.move_count} moves!"
+            self.message = (
+                f"You win in {self.game.move_count} moves! "
+                f"Next level starts shortly..."
+            )
             self.message_type = "success"
+
+            # Hẹn tự động chuyển level sau khi animation hoàn tất.
+            self.schedule_auto_level_advance()
         else:
             self.message = result.message
             self.message_type = "info"

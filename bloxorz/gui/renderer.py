@@ -31,6 +31,114 @@ class Renderer:
         # Font nhỏ dùng cho hint.
         self.small_font = pygame.font.SysFont("arial", 14)
         
+        # Font lớn dùng cho hiệu ứng chuyển level.
+        self.transition_title_font = pygame.font.SysFont(
+            "arial",
+            46,
+            bold=True,
+        )
+
+        # Font nhỏ hơn dùng để hiển thị tên level.
+        self.transition_subtitle_font = pygame.font.SysFont(
+            "arial",
+            24,
+            bold=False,
+        )
+        
+    def draw_level_transition(
+        self,
+        surface: pygame.Surface,
+        alpha: int,
+        title: str,
+        subtitle: str,
+    ) -> None:
+        """
+        Vẽ lớp phủ chuyển level.
+
+        alpha:
+            0   = hoàn toàn trong suốt.
+            255 = hoàn toàn tối.
+
+        title:
+            Ví dụ: "LEVEL COMPLETE" hoặc "LEVEL 2".
+
+        subtitle:
+            Tên level hiện tại hoặc level tiếp theo.
+        """
+
+        # Không cần vẽ khi hoàn toàn trong suốt.
+        if alpha <= 0:
+            return
+
+        alpha = max(0, min(255, alpha))
+
+        # Tạo surface trong suốt bằng kích thước cửa sổ.
+        overlay = pygame.Surface(
+            surface.get_size(),
+            pygame.SRCALPHA,
+        )
+
+        # Tô màu tối với alpha hiện tại.
+        overlay.fill(
+            (
+                *theme.LEVEL_TRANSITION_OVERLAY_COLOR,
+                alpha,
+            )
+        )
+
+        # Đè overlay lên toàn màn hình.
+        surface.blit(overlay, (0, 0))
+
+        # Chỉ hiện chữ khi màn hình đã tối tương đối.
+        text_alpha = int(
+            max(
+                0,
+                min(
+                    255,
+                    (alpha - 70) / 185 * 255,
+                ),
+            )
+        )
+
+        if text_alpha <= 0:
+            return
+
+        # Render tiêu đề.
+        title_surface = self.transition_title_font.render(
+            title,
+            True,
+            theme.LEVEL_TRANSITION_TITLE_COLOR,
+        )
+
+        title_surface.set_alpha(text_alpha)
+
+        title_rect = title_surface.get_rect(
+            center=(
+                theme.WINDOW_WIDTH // 2,
+                theme.WINDOW_HEIGHT // 2 - 28,
+            )
+        )
+
+        surface.blit(title_surface, title_rect)
+
+        # Render tên level.
+        subtitle_surface = self.transition_subtitle_font.render(
+            subtitle,
+            True,
+            theme.LEVEL_TRANSITION_SUBTITLE_COLOR,
+        )
+
+        subtitle_surface.set_alpha(text_alpha)
+
+        subtitle_rect = subtitle_surface.get_rect(
+            center=(
+                theme.WINDOW_WIDTH // 2,
+                theme.WINDOW_HEIGHT // 2 + 32,
+            )
+        )
+
+        surface.blit(subtitle_surface, subtitle_rect)
+        
     def draw_background(self, surface: pygame.Surface) -> None:
         """
         Vẽ nền đỏ cam kiểu Bloxorz gốc.
@@ -325,28 +433,6 @@ class Renderer:
                 theme.COLOR_START_RIGHT,
             )
 
-        # ====================================================
-        # BỔ SUNG: ĐỊNH NGHĨA MÀU SẮC CHO CÁC Ô NÂNG CAO TẠI ĐÂY
-        # ====================================================
-        if cell == "F":      # Fragile (Dễ vỡ): Màu Đỏ Cam nhạt
-            return ((240, 130, 130), (200, 90, 90), (220, 110, 110))
-            
-        if cell == "X":      # Soft Switch (Công tắc nhẹ): Màu Vàng Chanh
-            return ((255, 235, 60), (210, 190, 40), (235, 215, 50))
-            
-        if cell == "O":      # Heavy Switch (Công tắc nặng): Màu Cam Đậm
-            return ((255, 150, 50), (210, 110, 30), (235, 130, 40))
-            
-        if cell == "B":      # Bridge Closed (Cầu đang đóng): Màu Xám Đen Tối
-            return ((80, 85, 90), (55, 60, 65), (65, 70, 75))
-        # ====================================================
-        # Thêm màu này vào nhóm màu nâng cao bạn vừa viết ở bước trước:
-        if cell == "BO":     # Cầu đã mở: Tô giống hệt màu sàn gạch bình thường
-            return (
-                theme.COLOR_TILE_TOP,
-                theme.COLOR_TILE_LEFT,
-                theme.COLOR_TILE_RIGHT,
-            )
         return (
             theme.COLOR_TILE_TOP,
             theme.COLOR_TILE_LEFT,
@@ -441,17 +527,11 @@ class Renderer:
     ) -> None:
         """
         Vẽ một tile pseudo-3D.
-        """
-        cell = board.cell_at(r, c)
 
-        # ====================================================
-        # BỔ SUNG: Nếu là ô cầu 'B' và đã được mở trong logic, đổi trạng thái vẽ sang 'BO'
-        # ====================================================
-        if cell == "B" and hasattr(board, "rule_extension"):
-            rule_ext = board.rule_extension
-            if rule_ext.bridge_states.get((r, c), False):
-                cell = "BO"
-        # ====================================================
+        screen_y_offset dùng để tile rơi xuống dưới màn hình.
+        """
+
+        cell = board.cell_at(r, c)
 
         top_color, left_color, right_color = self.get_tile_colors(cell)
 
@@ -495,15 +575,11 @@ class Renderer:
             width=1,
         )
 
-        # Cho phép vẽ nhãn chữ cho cả các ô nâng cao
-        if cell in (Board.START, Board.GOAL, "F", "X", "O", "B"):
-            # Nếu là ô nền sáng (Vàng/Đỏ), ta dùng chữ màu tối (30,30,30) cho dễ đọc
-            text_color = (30, 30, 30) if cell in ("X", "F") else theme.COLOR_TEXT
-
+        if cell in (Board.START, Board.GOAL):
             label_surface = self.small_font.render(
                 cell,
                 True,
-                text_color,
+                theme.COLOR_TEXT,
             )
 
             label_rect = label_surface.get_rect(

@@ -39,6 +39,11 @@ class SolverResult:
 
     # Thông báo phụ để GUI hiển thị.
     message: str = ""
+    
+    @property
+    def memory_usage_kb(self) -> float:
+        # memory_usage được thống nhất lưu bằng byte.
+        return self.memory_usage / 1024
 
 
 class SolverFunction(Protocol):

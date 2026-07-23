@@ -1,105 +1,156 @@
-#Chuẩn hóa trạng thái để tọa độ của cube1 và cube2 không bị lộn xộn thứ tự vì khối không phân biệt đầu đuôi
-def canonicalize(state):
-    """
-    state dạng: (cube1, cube2, bridge_status, active_cube)
-    cube1: (r1, c1), cube2: (r2, c2)
-    bridge_status: có thể là tuple hoặc frozenset lưu trạng thái các cầu (để băm được)
-    """
-    cube1, cube2, bridge_status, active_cube = state
-    # Sắp xếp tọa độ của 2 ô nhỏ theo quy tắc cố định (ví dụ: ưu tiên hàng nhỏ, cột nhỏ trước)
-    sorted_cubes = sorted([cube1, cube2])
-    
-    # Trả về một tuple mới đã được chuẩn hóa để làm Key cho set/dict
-    return (tuple(sorted_cubes[0]), tuple(sorted_cubes[1]), bridge_status, active_cube)
-
-import time
-import psutil
-import os
-
-#---------------------A*---------------------
-import math
-
-def calculate_heuristic(state, goal_pos):
-    cube1, cube2 = state[0], state[1]
-    r_g, c_g = goal_pos
-    
-    # Khoảng cách Manhattan từ từng ô đến đích
-    d1 = abs(cube1[0] - r_g) + abs(cube1[1] - c_g)
-    d2 = abs(cube2[0] - r_g) + abs(cube2[1] - c_g)
-    
-    # Lấy khoảng cách ngắn nhất chia 2 (vì 1 bước lật block có thể đi 2 ô)
-    h_base = math.ceil(min(d1, d2) / 2)
-    
-    # Điểm phạt định hướng: Nếu block đang nằm (cube1 != cube2), 
-    # chắc chắn mất thêm ít nhất 1 hoặc 2 bước lật để dựng đứng nó lên đích
-    penalty = 0 if cube1 == cube2 else 1
-    
-    return h_base + penalty
+from __future__ import annotations
 
 import heapq
+import math
+import time
+import tracemalloc
 
-def solve_astar(initial_state, goal_pos, game_engine):
-    start_time = time.time()
+from bloxorz.core.game import BloxorzCoreGame
+from bloxorz.core.state import BlockState
+from bloxorz.solvers.base import SolverResult
+
+
+def state_key(game: BloxorzCoreGame, state: BlockState) -> tuple:
+    return game.encode_state(state).to_tuple()
+
+
+def calculate_heuristic(
+    state: BlockState,
+    goal_position: tuple[int, int],
+) -> int:
+    """
+    Heuristic cho Core Bloxorz.
+
+    Ta lấy Manhattan distance lớn nhất từ các ô block đang chiếm
+    đến goal rồi chia 2 và làm tròn lên.
+
+    Lý do chia 2:
+    Một lần lăn có thể làm một phần block dịch tối đa 2 ô theo
+    Manhattan distance.
+
+    Không cộng orientation penalty riêng để tránh double-counting.
+    """
+
+    goal_r, goal_c = goal_position
+
+    distances = [
+        abs(r - goal_r) + abs(c - goal_c)
+        for r, c in state.occupied_cells()
+    ]
+
+    return math.ceil(max(distances) / 2)
+
+
+def solve_astar(game: BloxorzCoreGame) -> SolverResult:
+    """
+    A* Search sử dụng:
+        f(n) = g(n) + h(n)
+    """
+
+    start_time = time.perf_counter()
+    tracemalloc.start()
+
     expanded_nodes = 0
-    process = psutil.Process(os.getpid())
-    initial_memory = process.memory_info().rss
-    peak_memory = initial_memory
-    
-    counter = 0  # Biến phụ tăng dần để tránh lỗi so sánh tuple trong heapq khi f bằng nhau và h bằng nhau
-    
-    # Khởi tạo giá trị ban đầu
-    h_init = calculate_heuristic(initial_state, goal_pos)
-    # Cấu trúc phần tử trong Heap: (f_value, h_value, unique_counter, current_state, path_moved)
-    heap = [(0 + h_init, h_init, counter, initial_state, [])]
-    heapq.heapify(heap)
-    
-    # Bảng lưu trữ chi phí đường đi thực tế g(n) tốt nhất từng ghi nhận 
-    g_scores = {canonicalize(initial_state): 0}
-    
-    while heap:
-        f, h, _, curr_state, path = heapq.heappop(heap)
-        norm_state = canonicalize(curr_state)
-        
-        # Nếu chi phí đường đi hiện tại dài hơn chi phí tối ưu đã từng tìm thấy cho trạng thái này -> bỏ qua
-        if len(path) > g_scores.get(norm_state, float('inf')):
+    counter = 0
+
+    # Bắt đầu tìm kiếm từ vị trí hiện tại của người chơi,
+    # không bắt buộc quay về Start.
+    initial_state = game.state
+    goal_position = game.board.goal
+
+    initial_h = calculate_heuristic(
+        initial_state,
+        goal_position,
+    )
+
+    # Heap item:
+    # (f, h, counter, g, state, path)
+    frontier = [
+        (
+            initial_h,
+            initial_h,
+            counter,
+            0.0,
+            initial_state,
+            [],
+        )
+    ]
+
+    g_scores = {
+        state_key(game, initial_state): 0.0
+    }
+
+    success = False
+    solution = []
+
+    while frontier:
+        (
+            _f,
+            _h,
+            _,
+            g_cost,
+            current_state,
+            path,
+        ) = heapq.heappop(frontier)
+
+        current_key = state_key(game, current_state)
+
+        if g_cost > g_scores.get(current_key, float("inf")):
             continue
-            
+
         expanded_nodes += 1
-        
-        # Theo dõi bộ nhớ đỉnh
-        current_mem = process.memory_info().rss
-        if current_mem > peak_memory:
-            peak_memory = current_mem
 
-        # Kiểm tra Đích
-        cube1, cube2 = curr_state[0], curr_state[1]
-        if cube1 == cube2 and cube1 == goal_pos:
-            search_time = time.time() - start_time
-            mem_used_kb = (peak_memory - initial_memory) / 1024
-            return {
-                "status": "Success",
-                "path": path,
-                "search_time": search_time,
-                "memory": mem_used_kb,
-                "expanded_nodes": expanded_nodes,
-                "solution_length": len(path)
-            }
+        if game.is_goal_state(current_state):
+            success = True
+            solution = path
+            break
 
-        # Khám phá các trạng thái lân cận từ Engine 
-        successors = game_engine.get_successors(curr_state)
-        
-        for next_state, action in successors:
-            norm_next = canonicalize(next_state)
-            new_g = len(path) + 1  # Giả định chi phí mỗi bước đi cố định bằng 1
-            
-            # Nếu tìm thấy một đường đi mới tới trạng thái này với chi phí thấp hơn trước đây
-            if new_g < g_scores.get(norm_next, float('inf')):
-                g_scores[norm_next] = new_g
-                new_h = calculate_heuristic(next_state, goal_pos)
-                new_f = new_g + new_h
-                
-                counter += 1
-                # Đẩy trạng thái mới vào hàng đợi ưu tiên
-                heapq.heappush(heap, (new_f, new_h, counter, next_state, path + [action]))
-                
-    return {"status": "Fail", "search_time": time.time() - start_time, "expanded_nodes": expanded_nodes}
+        for successor in game.successors(current_state):
+            next_state = successor.state
+            next_key = state_key(game, next_state)
+
+            new_g = g_cost + successor.cost
+
+            if new_g >= g_scores.get(next_key, float("inf")):
+                continue
+
+            g_scores[next_key] = new_g
+
+            new_h = calculate_heuristic(
+                next_state,
+                goal_position,
+            )
+
+            new_f = new_g + new_h
+            counter += 1
+
+            heapq.heappush(
+                frontier,
+                (
+                    new_f,
+                    new_h,
+                    counter,
+                    new_g,
+                    next_state,
+                    path + [successor.action],
+                ),
+            )
+
+    search_time = time.perf_counter() - start_time
+    _, peak_memory = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    return SolverResult(
+        algorithm="A*",
+        success=success,
+        solution=solution,
+        search_time=search_time,
+        memory_usage=peak_memory,
+        expanded_nodes=expanded_nodes,
+        solution_length=len(solution),
+        message=(
+            "A* found a solution."
+            if success
+            else "A* could not find a solution."
+        ),
+    )

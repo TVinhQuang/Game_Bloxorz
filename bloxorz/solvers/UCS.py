@@ -1,85 +1,93 @@
+from __future__ import annotations
+
+import heapq
 import time
 import tracemalloc
-import heapq # Thư viện hỗ trợ Hàng đợi ưu tiên (Min-Heap)
 
-from bloxorz.solvers.base import SolverResult
 from bloxorz.core.game import BloxorzCoreGame
+from bloxorz.core.state import BlockState
+from bloxorz.solvers.base import SolverResult
 
-def canonicalize(state):
-    cube1, cube2, bridge_status, active_cube = state
-    sorted_cubes = sorted([cube1, cube2])
-    return (tuple(sorted_cubes[0]), tuple(sorted_cubes[1]), bridge_status, active_cube)
+
+def state_key(game: BloxorzCoreGame, state: BlockState) -> tuple:
+    return game.encode_state(state).to_tuple()
+
 
 def solve_ucs(game: BloxorzCoreGame) -> SolverResult:
-    start_time = time.time()
-    tracemalloc.start()
-    
-    expanded_nodes = 0
-    
-    # Biến 'counter' trong heapq ở Python.
-    # Khi 2 phần tử có cùng chi phí g_cost, heapq sẽ so sánh đến phần tử tiếp theo trong tuple.
-    # Nếu không có counter, nó sẽ so sánh 'state', mà tuple chứa Set/Frozenset có thể lỗi. 
-    # Counter giúp đảm bảo trạng thái nào sinh ra trước sẽ được ưu tiên bốc ra trước nếu trùng chi phí.
-    counter = 0 
-    
-    initial_state = game.get_initial_state()
-    goal_pos = game.get_goal_position()
+    """
+    Uniform-Cost Search.
 
-    # Cấu trúc của 1 item trong Hàng đợi ưu tiên là:
-    # (Tổng chi phí tới hiện tại, Biến đếm thứ tự, Trạng thái, Lịch sử bước đi)
-    heap = [(0, counter, initial_state, [])]
-    heapq.heapify(heap) # Chuyển list thường thành Min-Heap
-    
-    # Từ điển (Dictionary) 'g_scores' lưu trữ CHỈ SỐ CHI PHÍ NHỎ NHẤT ĐÃ BIẾT để đi đến một trạng thái.
-    # Khác với BFS (đến trước thì luôn tối ưu), trong UCS ta có thể tìm ra đường khác tới cùng 1 điểm nhưng giá rẻ hơn, 
-    # nên ta dùng dict thay vì dùng set 'visited'.
-    g_scores = {canonicalize(initial_state): 0}
-    
+    UCS luôn expand state có tổng path cost g(n) nhỏ nhất.
+    """
+
+    start_time = time.perf_counter()
+    tracemalloc.start()
+
+    expanded_nodes = 0
+    counter = 0
+
+    # Bắt đầu tìm kiếm từ vị trí hiện tại của người chơi,
+    # không bắt buộc quay về Start.
+    initial_state = game.state
+    initial_key = state_key(game, initial_state)
+
+    # Heap item:
+    # (g_cost, counter, state, path)
+    frontier = [
+        (
+            0.0,
+            counter,
+            initial_state,
+            [],
+        )
+    ]
+
+    # Chi phí tốt nhất đã biết tới mỗi state.
+    g_scores = {initial_key: 0.0}
+
     success = False
     solution = []
 
-    # Lặp cho đến khi hàng đợi ưu tiên trống
-    while heap:
-        # Lấy phần tử có 'g_cost' THẤP NHẤT hiện tại ra khỏi heap
-        g_cost, _, curr_state, path = heapq.heappop(heap)
-        norm_state = canonicalize(curr_state)
-        
-        # BƯỚC LOẠI TRỪ:
-        # Vì ta có thể push cùng 1 trạng thái nhiều lần vào heap (do tìm được đường khác rẻ hơn),
-        # nên khi rút 1 state ra, nếu chi phí g_cost hiện tại lớn hơn chi phí tốt nhất ta đang lưu trong g_scores,
-        # nghĩa là ta đang lấy ra 1 đường đi cũ, kém tối ưu -> Bỏ qua nhánh này không xét tiếp.
-        if g_cost > g_scores.get(norm_state, float('inf')):
+    while frontier:
+        g_cost, _, current_state, path = heapq.heappop(frontier)
+        current_key = state_key(game, current_state)
+
+        # Bỏ qua entry cũ nếu đã có đường tốt hơn tới state này.
+        if g_cost > g_scores.get(current_key, float("inf")):
             continue
-            
+
         expanded_nodes += 1
 
-        # Goal Test
-        cube1, cube2 = curr_state[0], curr_state[1]
-        if cube1 == cube2 and cube1 == goal_pos:
+        if game.is_goal_state(current_state):
             success = True
             solution = path
             break
 
-        # Generate Successors
-        for next_state, action in game.get_successors(curr_state):
-            norm_next = canonicalize(next_state)
-            
-            # Chi phí cho 1 bước đi. 
-            # (Ở game Bloxorz bình thường, chi phí này luôn = 1, nên kết quả UCS chạy y hệt BFS. 
-            # Nhưng nếu game có "nền gạch dính" lăn mất 2 chi phí thì UCS mới phát huy sức mạnh)
-            step_cost = 1
-            new_g = g_cost + step_cost  # Tính tổng chi phí từ đầu đến next_state
-            
-            # NẾU TÌM ĐƯỢC ĐƯỜNG MỚI RẺ HƠN (hoặc chưa từng đi qua) ĐỂ ĐẾN next_state
-            if new_g < g_scores.get(norm_next, float('inf')):
-                # 1. Cập nhật lại kỷ lục chi phí rẻ nhất vào từ điển g_scores
-                g_scores[norm_next] = new_g
-                counter += 1
-                
-                # 2. Đẩy trạng thái này vào Hàng đợi ưu tiên cùng chi phí mới
-                heapq.heappush(heap, (new_g, counter, next_state, path + [action]))
+        for successor in game.successors(current_state):
+            next_state = successor.state
+            next_key = state_key(game, next_state)
 
-    search_time = time.time() - start_time
+            # Lấy cost từ Core/RuleExtension.
+            step_cost = successor.cost
+            new_g = g_cost + step_cost
+
+            if new_g >= g_scores.get(next_key, float("inf")):
+                continue
+
+            g_scores[next_key] = new_g
+            counter += 1
+
+            heapq.heappush(
+                frontier,
+                (
+                    new_g,
+                    counter,
+                    next_state,
+                    path + [successor.action],
+                ),
+            )
+
+    search_time = time.perf_counter() - start_time
     _, peak_memory = tracemalloc.get_traced_memory()
     tracemalloc.stop()
 
@@ -91,5 +99,9 @@ def solve_ucs(game: BloxorzCoreGame) -> SolverResult:
         memory_usage=peak_memory,
         expanded_nodes=expanded_nodes,
         solution_length=len(solution),
-        message="UCS found a solution!" if success else "UCS failed to find a solution."
+        message=(
+            "UCS found a solution."
+            if success
+            else "UCS could not find a solution."
+        ),
     )
