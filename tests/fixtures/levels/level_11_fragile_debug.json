@@ -1,0 +1,22 @@
+{
+  "id": 11,
+  "name": "Fragile Debug",
+  "difficulty": 5,
+  "category": "advanced",
+  "description": "Tests lying across a fragile tile.",
+  "grid": [
+    "#########",
+    "#S.F...G#",
+    "#########"
+  ],
+  "legend": {
+    "#": "void",
+    ".": "floor",
+    "S": "start",
+    "G": "goal",
+    "F": "fragile"
+  },
+  "bridges": [],
+  "switches": [],
+  "split": null
+}

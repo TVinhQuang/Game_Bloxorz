@@ -36,3 +36,6 @@ results/
 plots/
 
 ~$*.docx
+
+# Local player preferences.
+user_data/

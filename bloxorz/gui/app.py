@@ -15,6 +15,8 @@ from . import theme
 from .buttons import Button
 from .renderer import Renderer
 
+from bloxorz.gui.tutorial import TutorialOverlay
+
 from bloxorz.solvers import (
     solve_astar,
     solve_bfs,
@@ -22,6 +24,8 @@ from bloxorz.solvers import (
     solve_ucs,
 )
 from bloxorz.solvers.base import SolverResult
+
+from bloxorz.advanced import AdvancedRuleExtension
 
 
 class BloxorzPygameApp:
@@ -56,6 +60,15 @@ class BloxorzPygameApp:
 
         # Source root là thư mục Source/.
         self.source_root = Path(__file__).resolve().parents[2]
+        
+         # Màn hình hướng dẫn cho người chơi mới.
+        self.tutorial = TutorialOverlay(
+            settings_path=(
+                self.source_root
+                / "user_data"
+                / "settings.json"
+            )
+        )
 
         # Thư mục levels.
         self.levels_dir = self.source_root / "levels"
@@ -68,6 +81,33 @@ class BloxorzPygameApp:
 
         # Game hiện tại.
         self.game = self.create_game(self.current_level_index)
+        
+        # Progress hiển thị của mỗi bridge:
+        # 0.0 = đóng hoàn toàn
+        # 1.0 = mở hoàn toàn
+        self.bridge_visual_progress: dict[
+            tuple[int, int],
+            float,
+        ] = {}
+
+        self.reset_bridge_visual_progress()
+        
+        # None / "shatter" / "block_fall" / "wait_reset"
+        self.fragile_effect_phase: str | None = None
+
+        self.fragile_effect_start_time = 0
+
+        # Ô fragile đang vỡ.
+        self.fragile_break_cell: tuple[int, int] | None = None
+
+        # State block đã cố đứng lên fragile.
+        self.fragile_attempted_state: BlockState | None = None
+
+        # Progress mảnh vỡ từ 0 đến 1.
+        self.fragile_shatter_progress = 0.0
+
+        # Offset rơi của block.
+        self.fragile_block_y_offset = 0
 
         # Message hiển thị trên panel.
         self.message = "Use WASD or arrow keys to move."
@@ -163,6 +203,184 @@ class BloxorzPygameApp:
         self.transition_title = ""
         self.transition_subtitle = ""
         
+    def reset_bridge_visual_progress(self) -> None:
+        """
+        Đồng bộ bridge visual ngay lập tức theo trạng thái logic.
+        Dùng khi load/restart level.
+        """
+
+        bridge_states = getattr(
+            self.game.rule_extension,
+            "bridge_states",
+            {},
+        )
+
+        self.bridge_visual_progress = {
+            position: (
+                1.0 if is_open else 0.0
+            )
+            for position, is_open
+            in bridge_states.items()
+        }
+        
+    def update_bridge_animations(self) -> None:
+        """
+        Mỗi frame đưa progress dần về trạng thái bridge thật.
+        """
+
+        bridge_states = getattr(
+            self.game.rule_extension,
+            "bridge_states",
+            {},
+        )
+
+        delta_seconds = (
+            self.clock.get_time() / 1000.0
+        )
+
+        if theme.BRIDGE_ANIMATION_DURATION <= 0:
+            animation_step = 1.0
+        else:
+            animation_step = (
+                delta_seconds
+                / theme.BRIDGE_ANIMATION_DURATION
+            )
+
+        for position, is_open in bridge_states.items():
+            current = self.bridge_visual_progress.get(
+                position,
+                1.0 if is_open else 0.0,
+            )
+
+            target = 1.0 if is_open else 0.0
+
+            if current < target:
+                current = min(
+                    target,
+                    current + animation_step,
+                )
+
+            elif current > target:
+                current = max(
+                    target,
+                    current - animation_step,
+                )
+
+            self.bridge_visual_progress[
+                position
+            ] = current
+            
+    def start_fragile_break_sequence(
+        self,
+        attempted_state: BlockState,
+    ) -> None:
+        """
+        Fragile vỡ trước, sau đó block mới rơi.
+        """
+
+        self.clear_animation_and_input_queue()
+        self.clear_solver_playback()
+
+        # Không chạy fall effect cũ song song.
+        self.fall_phase = None
+
+        fragile_cell = None
+
+        for r, c in attempted_state.occupied_cells():
+            if self.game.board.cell_at(r, c) == "F":
+                fragile_cell = (r, c)
+                break
+
+        if fragile_cell is None:
+            # Trường hợp phòng thủ.
+            self.start_fall_sequence(
+                Direction.DOWN
+            )
+            return
+
+        self.fragile_break_cell = fragile_cell
+        self.fragile_attempted_state = attempted_state
+        self.fragile_shatter_progress = 0.0
+        self.fragile_block_y_offset = 0
+
+        self.fragile_effect_phase = "shatter"
+        self.fragile_effect_start_time = (
+            pygame.time.get_ticks()
+        )
+
+        self.message = "The fragile tile shattered!"
+        self.message_type = "error"
+        
+    def is_fragile_effect_active(self) -> bool:
+        return self.fragile_effect_phase is not None
+    
+    def update_fragile_effect(self) -> None:
+        if not self.is_fragile_effect_active():
+            return
+
+        now = pygame.time.get_ticks()
+
+        elapsed = (
+            now - self.fragile_effect_start_time
+        ) / 1000.0
+
+        if self.fragile_effect_phase == "shatter":
+            duration = (
+                theme.FRAGILE_SHATTER_DURATION
+            )
+
+            progress = elapsed / duration
+            progress = max(0.0, min(1.0, progress))
+
+            self.fragile_shatter_progress = progress
+
+            if progress >= 1.0:
+                self.fragile_effect_phase = "block_fall"
+                self.fragile_effect_start_time = now
+
+            return
+
+        if self.fragile_effect_phase == "block_fall":
+            duration = (
+                theme.FRAGILE_BLOCK_FALL_DURATION
+            )
+
+            progress = elapsed / duration
+            progress = max(0.0, min(1.0, progress))
+
+            # Rơi nhanh dần.
+            eased = progress * progress
+
+            self.fragile_block_y_offset = int(
+                eased * theme.FRAGILE_FALL_DISTANCE
+            )
+
+            if progress >= 1.0:
+                self.fragile_effect_phase = "wait_reset"
+                self.fragile_effect_start_time = now
+
+            return
+
+        if self.fragile_effect_phase == "wait_reset":
+            if elapsed < theme.FRAGILE_RESET_DELAY:
+                return
+
+            self.finish_fragile_effect()
+            
+    def finish_fragile_effect(self) -> None:
+        self.fragile_effect_phase = None
+        self.fragile_effect_start_time = 0
+        self.fragile_break_cell = None
+        self.fragile_attempted_state = None
+        self.fragile_shatter_progress = 0.0
+        self.fragile_block_y_offset = 0
+
+        self.game.reset()
+        self.reset_bridge_visual_progress()
+
+        self.message = "Level reset."
+        self.message_type = "info"
+        
     def is_level_transition_active(self) -> bool:
         """
         Kiểm tra app có đang thực hiện hiệu ứng chuyển level không.
@@ -224,6 +442,8 @@ class BloxorzPygameApp:
 
         self.current_level_index = level_index
         self.game = self.create_game(level_index)
+        
+        self.reset_bridge_visual_progress()
 
         self.clear_animation_and_input_queue()
         self.clear_solver_playback()
@@ -545,6 +765,8 @@ class BloxorzPygameApp:
         self.tile_fall_offsets = {}
 
         self.game.reset()
+        
+        self.reset_bridge_visual_progress()
 
         self.message = "Level reset."
         self.message_type = "info"
@@ -564,14 +786,26 @@ class BloxorzPygameApp:
 
         return level_paths
 
-    def create_game(self, level_index: int) -> BloxorzCoreGame:
+    def create_game(
+        self,
+        level_index: int,
+    ) -> BloxorzCoreGame:
         """
-        Tạo game mới từ level index.
+        Tạo game với AdvancedRuleExtension riêng cho mỗi level.
         """
 
-        level_path = self.level_paths[level_index]
+        level_path = self.level_paths[
+            level_index
+        ]
 
-        return BloxorzCoreGame.from_level_file(level_path)
+        advanced_rules = AdvancedRuleExtension(
+            level_path
+        )
+
+        return BloxorzCoreGame.from_level_file(
+            level_path,
+            rule_extension=advanced_rules,
+        )
 
     def create_buttons(self) -> list[Button]:
         """
@@ -618,52 +852,75 @@ class BloxorzPygameApp:
 
         while self.running:
             self.handle_events()
-            self.update_animation()
-            self.update_fall_effect()
 
-            # Chỉ phát solver/input khi không rơi và không chuyển level.
-            if (
-                not self.is_fall_effect_active()
-                and not self.is_level_transition_active()
-            ):
-                if self.is_solver_playback:
-                    self.process_solver_playback()
-                else:
-                    self.process_queued_input_if_possible()
+            # Khi tutorial đang mở, game tạm dừng hoàn toàn.
+            if not self.tutorial.active:
+                self.update_animation()
+                self.update_fall_effect()
+                self.update_fragile_effect()
+                self.update_bridge_animations()
 
-            # Kiểm tra có cần tự động sang level kế tiếp hay không.
-            self.update_auto_level_advance()
-            
-            # Update transition sau auto-next,
-            # vì auto-next có thể vừa bắt đầu transition trong frame này.
-            self.update_level_transition()
-            
+                if (
+                    not self.is_fall_effect_active()
+                    and not self.is_fragile_effect_active()
+                    and not self.is_level_transition_active()
+                ):
+                    if self.is_solver_playback:
+                        self.process_solver_playback()
+                    else:
+                        self.process_queued_input_if_possible()
+
+                self.update_auto_level_advance()
+                self.update_level_transition()
+
             self.draw()
             self.clock.tick(theme.FPS)
 
         pygame.quit()
 
     def handle_events(self) -> None:
-        """
-        Xử lý toàn bộ event Pygame.
-        """
-
         for event in pygame.event.get():
-            # Nếu người dùng bấm nút X của cửa sổ.
             if event.type == pygame.QUIT:
                 self.running = False
+                continue
 
-            # Nếu người dùng bấm phím.
-            elif event.type == pygame.KEYDOWN:
-                self.handle_key_down(event.key)
-                
+            # Tutorial có quyền ưu tiên xử lý input.
+            if self.tutorial.active:
+                if event.type == pygame.KEYDOWN:
+                    self.tutorial.handle_key(
+                        event.key
+                    )
+
+                elif (
+                    event.type
+                    == pygame.MOUSEBUTTONDOWN
+                    and event.button == 1
+                ):
+                    self.tutorial.handle_click(
+                        event.pos
+                    )
+
+                # Không truyền event xuống gameplay.
+                continue
+
+            if event.type == pygame.KEYDOWN:
+                self.handle_key_down(
+                    event.key
+                )
+
             elif event.type == pygame.KEYUP:
-                self.handle_key_up(event.key)
+                self.handle_key_up(
+                    event.key
+                )
 
-            # Nếu người dùng click chuột.
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1:
-                    self.handle_mouse_click(event.pos)
+            elif (
+                event.type
+                == pygame.MOUSEBUTTONDOWN
+                and event.button == 1
+            ):
+                self.handle_mouse_click(
+                    event.pos
+                )
 
     def handle_key_up(self, key: int) -> None:
         """
@@ -702,6 +959,20 @@ class BloxorzPygameApp:
         # P để quay về level trước.
         if key == pygame.K_p:
             self.previous_level()
+            return
+        
+        if key == pygame.K_h:
+            if (
+                self.is_fall_effect_active()
+                or self.is_fragile_effect_active()
+                or self.is_level_transition_active()
+            ):
+                return
+
+            self.clear_animation_and_input_queue()
+            self.clear_solver_playback()
+            self.cancel_auto_level_advance()
+            self.tutorial.open()
             return
 
         # Mapping phím sang Direction.
@@ -787,6 +1058,9 @@ class BloxorzPygameApp:
         Nếu không animation:
             thực hiện move ngay.
         """
+        if self.is_fragile_effect_active():
+            return
+        
         if self.is_level_transition_active():
             return
         
@@ -832,10 +1106,12 @@ class BloxorzPygameApp:
         Restart level hiện tại.
         """
         self.cancel_auto_level_advance()
+        self.cancel_fragile_effect()
         self.clear_solver_playback()
         self.clear_animation_and_input_queue()
 
         self.game.reset()
+        self.reset_bridge_visual_progress()
         self.message = "Level restarted."
         self.message_type = "info"
 
@@ -847,6 +1123,7 @@ class BloxorzPygameApp:
         if self.is_level_transition_active():
             return
 
+        self.cancel_fragile_effect()
         self.cancel_auto_level_advance()
 
         if self.current_level_index == 0:
@@ -866,6 +1143,7 @@ class BloxorzPygameApp:
         if self.is_level_transition_active():
             return
 
+        self.cancel_fragile_effect()
         self.cancel_auto_level_advance()
 
         if self.current_level_index >= len(self.level_paths) - 1:
@@ -876,6 +1154,14 @@ class BloxorzPygameApp:
         target_index = self.current_level_index + 1
 
         self.start_level_transition(target_index)
+        
+    def cancel_fragile_effect(self) -> None:
+        self.fragile_effect_phase = None
+        self.fragile_effect_start_time = 0
+        self.fragile_break_cell = None
+        self.fragile_attempted_state = None
+        self.fragile_shatter_progress = 0.0
+        self.fragile_block_y_offset = 0
 
     def handle_solver_button(self, algorithm: str) -> None:
         """
@@ -1007,8 +1293,38 @@ class BloxorzPygameApp:
 
         self.renderer.draw_background(self.screen)
 
+        hidden_tiles: set[tuple[int, int]] = set()
+        fragile_effect_to_draw = False
+
+        if (
+            self.is_fragile_effect_active()
+            and self.fragile_attempted_state is not None
+        ):
+            board_display_state = (
+                self.fragile_attempted_state
+            )
+
+            if self.fragile_effect_phase == "block_fall":
+                block_y_offset = (
+                    self.fragile_block_y_offset
+                )
+            else:
+                block_y_offset = 0
+
+            tile_offsets = {}
+            show_block = True
+
+            if self.fragile_break_cell is not None:
+                hidden_tiles.add(
+                    self.fragile_break_cell
+                )
+
+            fragile_effect_to_draw = (
+                self.fragile_effect_phase == "shatter"
+            )
+        
         # Khi block đang rơi, vẽ block ở falling_block_state.
-        if self.fall_phase == "block" and self.falling_block_state is not None:
+        elif self.fall_phase == "block" and self.falling_block_state is not None:
             board_display_state = self.falling_block_state
             block_y_offset = self.block_fall_y_offset
             tile_offsets = {}
@@ -1036,7 +1352,20 @@ class BloxorzPygameApp:
             block_y_offset=block_y_offset,
             tile_fall_offsets=tile_offsets,
             show_block=show_block,
+            bridge_progress=self.bridge_visual_progress,
+            hidden_tiles=hidden_tiles,
         )
+        
+        if (
+            fragile_effect_to_draw
+            and self.fragile_break_cell is not None
+        ):
+            self.renderer.draw_fragile_shatter(
+                surface=self.screen,
+                board=self.game.board,
+                cell=self.fragile_break_cell,
+                progress=self.fragile_shatter_progress,
+            )
 
         self.renderer.draw_side_panel(
             surface=self.screen,
@@ -1057,6 +1386,12 @@ class BloxorzPygameApp:
                 subtitle=self.transition_subtitle,
             )
 
+        # Tutorial luôn nằm trên cùng.
+        if self.tutorial.active:
+            self.tutorial.draw(
+                self.screen
+            )
+        
         pygame.display.flip()
         
     def perform_move_with_animation(self, direction: Direction) -> None:
@@ -1069,7 +1404,16 @@ class BloxorzPygameApp:
         result = self.game.move(direction)
 
         if not result.valid:
-            self.start_fall_sequence(direction)
+            if (
+                result.failure_code == "fragile_break"
+                and result.attempted_state is not None
+            ):
+                self.start_fragile_break_sequence(
+                    result.attempted_state
+                )
+            else:
+                self.start_fall_sequence(direction)
+
             return
 
         new_state = self.game.state

@@ -176,3 +176,67 @@ LEVEL_TRANSITION_TITLE_COLOR = (245, 185, 75)
 
 # Màu mô tả level.
 LEVEL_TRANSITION_SUBTITLE_COLOR = (225, 225, 230)
+
+# ============================================================
+# ADVANCED TILE COLORS
+# ============================================================
+
+# Fragile tile.
+COLOR_FRAGILE_TOP = (218, 135, 68)
+COLOR_FRAGILE_LEFT = (142, 76, 36)
+COLOR_FRAGILE_RIGHT = (177, 96, 42)
+COLOR_FRAGILE_CRACK = (82, 40, 24)
+COLOR_FRAGILE_HIGHLIGHT = (248, 181, 102)
+
+# Soft switch: nút tròn.
+COLOR_SOFT_SWITCH_TOP = (255, 225, 55)
+COLOR_SOFT_SWITCH_SIDE = (180, 145, 20)
+COLOR_SOFT_SWITCH_EDGE = (90, 70, 15)
+COLOR_SOFT_SWITCH_HIGHLIGHT = (255, 247, 155)
+
+# Heavy switch: tấm chữ X.
+COLOR_HEAVY_SWITCH_TOP = (230, 105, 32)
+COLOR_HEAVY_SWITCH_SIDE = (135, 57, 18)
+COLOR_HEAVY_SWITCH_EDGE = (70, 28, 12)
+COLOR_HEAVY_SWITCH_HIGHLIGHT = (255, 175, 80)
+
+# Bridge closed.
+COLOR_BRIDGE_GAP = (22, 18, 17)
+COLOR_BRIDGE_GAP_EDGE = (5, 5, 5)
+COLOR_BRIDGE_ANCHOR_TOP = (105, 108, 110)
+COLOR_BRIDGE_ANCHOR_EDGE = (48, 50, 52)
+
+# Bridge open.
+COLOR_BRIDGE_DECK_TOP = (145, 103, 61)
+COLOR_BRIDGE_DECK_EDGE = (65, 42, 25)
+COLOR_BRIDGE_PLANK_LINE = (82, 52, 30)
+COLOR_BRIDGE_METAL = (175, 180, 182)
+COLOR_BRIDGE_METAL_DARK = (65, 68, 70)
+
+# Split switch để chuẩn bị cho bước sau.
+COLOR_SPLIT_SWITCH = (104, 165, 240)
+COLOR_SPLIT_SWITCH_EDGE = (31, 54, 105)
+
+# ============================================================
+# ADVANCED ANIMATIONS
+# ============================================================
+
+# Thời gian cầu trượt ra hoặc thu vào.
+BRIDGE_ANIMATION_DURATION = 0.65
+
+# Thời gian fragile bắt đầu nứt.
+FRAGILE_CRACK_DURATION = 0.16
+
+# Thời gian các mảnh fragile vỡ và rơi.
+FRAGILE_SHATTER_DURATION = 0.55
+
+# Thời gian block rơi sau khi tile đã vỡ.
+FRAGILE_BLOCK_FALL_DURATION = 0.58
+
+# Thời gian chờ trước khi reset.
+FRAGILE_RESET_DELAY = 0.20
+
+# Khoảng cách các mảnh và block rơi theo pixel.
+FRAGILE_FALL_DISTANCE = 560
+
+TUTORIAL_FADE_DURATION = 0.25

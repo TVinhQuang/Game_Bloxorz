@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from .movement import compute_next_state
 
 from .board import Board
 from .enums import DIRECTION_ORDER, Direction, MoveStatus, Orientation
@@ -22,6 +23,14 @@ class MoveResult:
     valid: bool
     won: bool
     message: str
+    
+    # State mà block đã cố di chuyển tới.
+    # Với move hợp lệ, nó bằng new_state.
+    # Với move lỗi, nó vẫn giúp GUI vẽ hiệu ứng.
+    attempted_state: BlockState | None = None
+
+    # Mã lỗi lấy từ ValidationResult.
+    failure_code: str = ""
 
 
 @dataclass(frozen=True)
@@ -69,6 +78,13 @@ class BloxorzCoreGame:
 
         # Nếu chưa có Advanced rules thì dùng NoOp.
         self.rule_extension = rule_extension or NoOpRuleExtension()
+        
+        # Renderer cần truy cập bridge state hiện tại.
+        setattr(
+            self.board,
+            "rule_extension",
+            self.rule_extension,
+        )
 
         # Block luôn bắt đầu ở S và đứng thẳng.
         self.initial_state = BlockState(
@@ -96,10 +112,21 @@ class BloxorzCoreGame:
         return cls(board=board, rule_extension=rule_extension)
 
     def reset(self) -> None:
-        # Đưa state hiện tại về state ban đầu.
+        """
+        Reset block, move counter và Advanced states.
+        """
+
         self.state = self.initial_state
-        # Reset số move về 0 khi restart level.
         self.move_count = 0
+
+        reset_hook = getattr(
+            self.rule_extension,
+            "reset",
+            None,
+        )
+
+        if callable(reset_hook):
+            reset_hook()
 
     def encode_state(self, state: BlockState | None = None) -> GameStateKey:
         """
@@ -135,20 +162,29 @@ class BloxorzCoreGame:
             and self.board.is_goal_cell(chosen_state.r, chosen_state.c)
         )
 
-    def validate_core_support(self, state: BlockState) -> ValidationResult:
+    def validate_core_support(
+        self,
+        state: BlockState,
+    ) -> ValidationResult:
         """
-        Kiểm tra luật Core:
-        mọi ô block chiếm phải nằm trên ô support được.
+        Kiểm tra toàn bộ các ô mà block đang chiếm.
 
-        Nếu một phần block ra ngoài board hoặc đè lên void '#',
-        state đó invalid.
+        Nếu bất kỳ phần nào của block:
+        - ra khỏi board; hoặc
+        - nằm trên void
+
+        thì state không hợp lệ.
         """
 
         for r, c in state.occupied_cells():
             if not self.board.is_base_support_cell(r, c):
                 return ValidationResult(
                     valid=False,
-                    reason=f"Block is not fully supported at cell ({r}, {c}).",
+                    reason=(
+                        f"Block is not fully supported "
+                        f"at cell ({r}, {c})."
+                    ),
+                    code="unsupported",
                 )
 
         return ValidationResult(valid=True)
@@ -203,50 +239,69 @@ class BloxorzCoreGame:
 
     def move(self, direction: Direction) -> MoveResult:
         """
-        Di chuyển block trong game hiện tại.
-
-        Nếu move invalid:
-            - self.state không đổi
-
-        Nếu move valid:
-            - self.state được cập nhật
+        Di chuyển block và giữ lại nguyên nhân nếu move thất bại.
         """
 
         old_state = self.state
 
-        next_state = self.next_state_if_valid(old_state, direction)
+        # State hình học mà block cố lăn tới.
+        raw_next_state = compute_next_state(
+            old_state,
+            direction,
+        )
 
-        if next_state is None:
+        # Kiểm tra Core + Advanced.
+        validation = self.validate_state(
+            raw_next_state
+        )
+
+        if not validation.valid:
             return MoveResult(
                 status=MoveStatus.INVALID,
                 old_state=old_state,
                 new_state=old_state,
                 valid=False,
                 won=self.is_goal_state(old_state),
-                message=f"Invalid move: {direction.value}",
+                message=(
+                    validation.reason
+                    or f"Invalid move: {direction.value}"
+                ),
+                attempted_state=raw_next_state,
+                failure_code=validation.code,
             )
 
-        self.state = next_state
-        # Chỉ move hợp lệ mới được tính vào move_count.
+        # Áp dụng switch/bridge sau khi state hợp lệ.
+        final_next_state = (
+            self.rule_extension.after_valid_move(
+                board=self.board,
+                old_state=old_state,
+                direction=direction,
+                new_state=raw_next_state,
+            )
+        )
+
+        self.state = final_next_state
         self.move_count += 1
-        
-        if self.is_goal_state(next_state):
+
+        if self.is_goal_state(final_next_state):
             return MoveResult(
                 status=MoveStatus.WON,
                 old_state=old_state,
-                new_state=next_state,
+                new_state=final_next_state,
                 valid=True,
                 won=True,
                 message="You win!",
+                attempted_state=final_next_state,
             )
 
         return MoveResult(
             status=MoveStatus.MOVED,
             old_state=old_state,
-            new_state=next_state,
+            new_state=final_next_state,
             valid=True,
             won=False,
             message=f"Moved: {direction.value}",
+            attempted_state=final_next_state,
         )
 
     def legal_actions(self, state: BlockState | None = None) -> list[Direction]:

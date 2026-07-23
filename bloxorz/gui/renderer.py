@@ -408,17 +408,27 @@ class Renderer:
 
         return top, right, bottom, left
 
-    def get_tile_colors(self, cell: str) -> tuple[
+    def get_tile_colors(
+        self,
+        cell: str,
+    ) -> tuple[
         tuple[int, int, int],
         tuple[int, int, int],
         tuple[int, int, int],
     ]:
         """
-        Chọn màu top/left/right cho tile.
+        Trả về ba màu của một tile pseudo-3D:
 
-        Void không được vẽ tile.
+        - màu mặt trên;
+        - màu mặt trái;
+        - màu mặt phải.
+
+        Bridge không được xử lý màu trong hàm này nữa,
+        vì bridge sẽ được vẽ bằng draw_open_bridge()
+        hoặc draw_closed_bridge() trong draw_tile().
         """
 
+        # Goal vẫn sử dụng màu xanh lá riêng.
         if cell == Board.GOAL:
             return (
                 theme.COLOR_GOAL_TOP,
@@ -426,6 +436,7 @@ class Renderer:
                 theme.COLOR_GOAL_RIGHT,
             )
 
+        # Start vẫn sử dụng màu xanh dương riêng.
         if cell == Board.START:
             return (
                 theme.COLOR_START_TOP,
@@ -433,6 +444,27 @@ class Renderer:
                 theme.COLOR_START_RIGHT,
             )
 
+        # Fragile tile có màu cam riêng.
+        # Sau khi mặt tile được vẽ, draw_fragile_overlay()
+        # sẽ vẽ thêm các đường nứt lên trên.
+        if cell == "F":
+            return (
+                theme.COLOR_FRAGILE_TOP,
+                theme.COLOR_FRAGILE_LEFT,
+                theme.COLOR_FRAGILE_RIGHT,
+            )
+
+        # Các switch dùng nền gạch bình thường.
+        # Hình dạng nút tròn, chữ X hoặc ngoặc sẽ được
+        # vẽ đè lên sau bằng các hàm overlay.
+        if cell in ("X", "O", "P"):
+            return (
+                theme.COLOR_TILE_TOP,
+                theme.COLOR_TILE_LEFT,
+                theme.COLOR_TILE_RIGHT,
+            )
+
+        # Floor và các tile thông thường.
         return (
             theme.COLOR_TILE_TOP,
             theme.COLOR_TILE_LEFT,
@@ -448,6 +480,8 @@ class Renderer:
         block_y_offset: int = 0,
         tile_fall_offsets: dict[tuple[int, int], int] | None = None,
         show_block: bool = True,
+        bridge_progress: dict[tuple[int, int], float] | None = None,
+        hidden_tiles: set[tuple[int, int]] | None = None,
     ) -> None:
         """
         Vẽ board và block.
@@ -466,7 +500,12 @@ class Renderer:
         show_block:
             False khi block đã rơi mất khỏi màn hình.
         """
-
+        if tile_fall_offsets is None:
+            tile_fall_offsets = {}
+            
+        if hidden_tiles is None:
+            hidden_tiles = set()
+    
         origin_x, origin_y = self.compute_origin(board)
         self.draw_board_shadow(surface, board, origin_x, origin_y)
 
@@ -476,6 +515,10 @@ class Renderer:
         # Vẽ tile theo thứ tự r+c tăng dần để giữ cảm giác isometric.
         for r in range(board.rows):
             for c in range(board.cols):
+                # Fragile đã vỡ thì bỏ qua tile này.
+                if (r, c) in hidden_tiles:
+                    continue
+                
                 cell = board.cell_at(r, c)
 
                 if cell == Board.VOID:
@@ -491,6 +534,7 @@ class Renderer:
                     origin_x=origin_x,
                     origin_y=origin_y,
                     screen_y_offset=y_offset,
+                    bridge_progress=bridge_progress,
                 )
 
         # Goal marker cũng phải rơi theo tile goal.
@@ -524,58 +568,242 @@ class Renderer:
         origin_x: int,
         origin_y: int,
         screen_y_offset: int = 0,
+
+        # Progress hình ảnh của từng bridge.
+        # 0.0 = đóng hoàn toàn.
+        # 1.0 = mở hoàn toàn.
+        bridge_progress: dict[tuple[int, int], float] | None = None,
     ) -> None:
         """
         Vẽ một tile pseudo-3D.
 
-        screen_y_offset dùng để tile rơi xuống dưới màn hình.
+        Các tile thông thường:
+        - floor
+        - start
+        - goal
+        - fragile
+        - soft switch
+        - heavy switch
+
+        Bridge được xử lý riêng bằng:
+        - draw_closed_bridge()
+        - draw_open_bridge()
         """
 
+        # Đọc ký hiệu tile thật trong grid JSON.
         cell = board.cell_at(r, c)
 
-        top_color, left_color, right_color = self.get_tile_colors(cell)
+        # Chuyển tọa độ hàng/cột sang tọa độ isometric trên màn hình.
+        x, y = self.grid_to_iso(
+            r,
+            c,
+            origin_x,
+            origin_y,
+        )
 
-        x, y = self.grid_to_iso(r, c, origin_x, origin_y)
-
-        # Dịch tile xuống dưới khi có hiệu ứng rơi.
+        # Khi map đang có hiệu ứng rơi,
+        # tile được dịch xuống theo screen_y_offset.
         y += screen_y_offset
 
-        top, right, bottom, left = self.get_tile_points(x, y)
+        # Bridge được vẽ bằng model riêng,
+        # không vẽ giống tile đá thông thường.
+        if cell == "B":
+            # Nếu app chưa truyền animation progress,
+            # renderer vẽ ngay theo trạng thái logic thật.
+            if bridge_progress is None:
+                visual_progress = (
+                    1.0
+                    if self.is_bridge_open(board, r, c)
+                    else 0.0
+                )
 
+            # Nếu app đã truyền progress,
+            # lấy tiến độ mở/đóng hiện tại của đúng ô bridge này.
+            else:
+                visual_progress = bridge_progress.get(
+                    (r, c),
+                    0.0,
+                )
+
+            # Cầu đóng hoàn toàn:
+            # chỉ vẽ dấu neo nhỏ.
+            if visual_progress <= 0.001:
+                self.draw_closed_bridge(
+                    surface=surface,
+                    x=x,
+                    y=y,
+                )
+
+            # Cầu đang mở hoặc đã mở:
+            # progress quyết định độ dài cầu được kéo ra.
+            else:
+                self.draw_open_bridge(
+                    surface=surface,
+                    x=x,
+                    y=y,
+                    progress=visual_progress,
+                )
+
+            # Bridge đã được vẽ riêng nên không chạy xuống
+            # phần vẽ tile thông thường bên dưới.
+            return
+
+        # ========================================================
+        # TILE THÔNG THƯỜNG
+        # ========================================================
+
+        # Lấy ba màu:
+        # - mặt trên
+        # - mặt trái
+        # - mặt phải
+        top_color, left_color, right_color = (
+            self.get_tile_colors(cell)
+        )
+
+        # Lấy bốn đỉnh của mặt trên hình thoi.
+        top, right, bottom, left = self.get_tile_points(
+            x,
+            y,
+        )
+
+        # Độ dày của tile.
         depth = theme.ISO_TILE_DEPTH
 
-        bottom_down = (bottom[0], bottom[1] + depth)
-        left_down = (left[0], left[1] + depth)
-        right_down = (right[0], right[1] + depth)
+        # Các điểm được dịch xuống để tạo mặt bên tile.
+        bottom_down = (
+            bottom[0],
+            bottom[1] + depth,
+        )
 
+        left_down = (
+            left[0],
+            left[1] + depth,
+        )
+
+        right_down = (
+            right[0],
+            right[1] + depth,
+        )
+
+        # ========================================================
+        # VẼ HÌNH KHỐI TILE
+        # ========================================================
+
+        # Mặt trái.
         pygame.draw.polygon(
             surface,
             left_color,
-            [left, bottom, bottom_down, left_down],
+            [
+                left,
+                bottom,
+                bottom_down,
+                left_down,
+            ],
         )
-        
-        self.draw_tile_surface_details(surface, r, c, top, right, bottom, left)
 
+        # Mặt phải.
         pygame.draw.polygon(
             surface,
             right_color,
-            [right, bottom, bottom_down, right_down],
+            [
+                right,
+                bottom,
+                bottom_down,
+                right_down,
+            ],
         )
 
+        # Mặt trên.
         pygame.draw.polygon(
             surface,
             top_color,
-            [top, right, bottom, left],
+            [
+                top,
+                right,
+                bottom,
+                left,
+            ],
         )
 
+        # Viền mặt trên.
         pygame.draw.polygon(
             surface,
             theme.COLOR_GRID_LINE,
-            [top, right, bottom, left],
+            [
+                top,
+                right,
+                bottom,
+                left,
+            ],
             width=1,
         )
 
-        if cell in (Board.START, Board.GOAL):
+        # Vẽ texture sau mặt trên.
+        # Nếu đặt trước mặt trên, texture sẽ bị polygon đè mất.
+        self.draw_tile_surface_details(
+            surface=surface,
+            r=r,
+            c=c,
+            top=top,
+            right=right,
+            bottom=bottom,
+            left=left,
+        )
+
+        # ========================================================
+        # VẼ HÌNH DẠNG CỦA ADVANCED TILE
+        # ========================================================
+
+        if cell == "F":
+            # Fragile: vẽ các đường nứt.
+            self.draw_fragile_overlay(
+                surface=surface,
+                top=top,
+                right=right,
+                bottom=bottom,
+                left=left,
+            )
+
+        elif cell == "X":
+            # Soft switch: vẽ nút tròn nổi.
+            self.draw_soft_switch_overlay(
+                surface=surface,
+                top=top,
+                right=right,
+                bottom=bottom,
+                left=left,
+            )
+
+        elif cell == "O":
+            # Heavy switch: vẽ tấm chữ X.
+            self.draw_heavy_switch_overlay(
+                surface=surface,
+                top=top,
+                right=right,
+                bottom=bottom,
+                left=left,
+            )
+
+        # Sau này, khi đã tạo draw_split_switch_overlay(),
+        # bạn có thể mở phần này:
+        #
+        # elif cell == "P":
+        #     self.draw_split_switch_overlay(
+        #         surface=surface,
+        #         top=top,
+        #         right=right,
+        #         bottom=bottom,
+        #         left=left,
+        #     )
+
+        # ========================================================
+        # CHỈ HIỂN THỊ CHỮ CHO START VÀ GOAL
+        # ========================================================
+
+        if cell in (
+            Board.START,
+            Board.GOAL,
+        ):
             label_surface = self.small_font.render(
                 cell,
                 True,
@@ -583,10 +811,16 @@ class Renderer:
             )
 
             label_rect = label_surface.get_rect(
-                center=(x, y + theme.ISO_TILE_HEIGHT // 2)
+                center=(
+                    x,
+                    y + theme.ISO_TILE_HEIGHT // 2,
+                )
             )
 
-            surface.blit(label_surface, label_rect)
+            surface.blit(
+                label_surface,
+                label_rect,
+            )
 
     def draw_goal_marker(
         self,
@@ -632,6 +866,129 @@ class Renderer:
             small_points,
             width=2,
         )
+        
+    def draw_fragile_shatter(
+        self,
+        surface: pygame.Surface,
+        board: Board,
+        cell: tuple[int, int],
+        progress: float,
+    ) -> None:
+        """
+        Vẽ tile fragile thành nhiều mảnh nhỏ đang rơi.
+        """
+
+        progress = max(
+            0.0,
+            min(1.0, progress),
+        )
+
+        origin_x, origin_y = self.compute_origin(
+            board
+        )
+
+        r, c = cell
+
+        x, y = self.grid_to_iso(
+            r,
+            c,
+            origin_x,
+            origin_y,
+        )
+
+        top, right, bottom, left = (
+            self.get_tile_points(x, y)
+        )
+
+        center = (
+            (
+                top[0]
+                + right[0]
+                + bottom[0]
+                + left[0]
+            ) // 4,
+            (
+                top[1]
+                + right[1]
+                + bottom[1]
+                + left[1]
+            ) // 4,
+        )
+
+        edge_points = [
+            top,
+            self.lerp_point(top, right, 0.5),
+            right,
+            self.lerp_point(right, bottom, 0.5),
+            bottom,
+            self.lerp_point(bottom, left, 0.5),
+            left,
+            self.lerp_point(left, top, 0.5),
+        ]
+
+        velocities = [
+            (-42, -30),
+            (12, -38),
+            (52, -14),
+            (65, 12),
+            (24, 30),
+            (-22, 35),
+            (-58, 15),
+            (-60, -12),
+        ]
+
+        gravity = 250
+
+        for index in range(8):
+            point_a = edge_points[index]
+            point_b = edge_points[
+                (index + 1) % 8
+            ]
+
+            velocity_x, velocity_y = velocities[index]
+
+            offset_x = int(
+                velocity_x * progress
+            )
+
+            offset_y = int(
+                velocity_y * progress
+                + gravity * progress * progress
+            )
+
+            fragment = [
+                (
+                    center[0] + offset_x,
+                    center[1] + offset_y,
+                ),
+                (
+                    point_a[0] + offset_x,
+                    point_a[1] + offset_y,
+                ),
+                (
+                    point_b[0] + offset_x,
+                    point_b[1] + offset_y,
+                ),
+            ]
+
+            color = (
+                theme.COLOR_FRAGILE_TOP
+                if index % 2 == 0
+                else theme.COLOR_FRAGILE_RIGHT
+            )
+
+            pygame.draw.polygon(
+                surface,
+                color,
+                fragment,
+            )
+
+            pygame.draw.polygon(
+                surface,
+                theme.COLOR_FRAGILE_CRACK,
+                fragment,
+                width=1,
+            )
 
     def draw_block(
         self,
@@ -891,6 +1248,7 @@ class Renderer:
             "WASD / Arrow keys: Move",
             "R: Restart",
             "N/P: Next/Previous level",
+            "H: How to Play",
             "ESC: Quit",
         ]
 
@@ -921,3 +1279,523 @@ class Renderer:
     ) -> None:
         text_surface = font.render(text, True, color)
         surface.blit(text_surface, (x, y))
+        
+    def lerp_point(
+        self,
+        point_a: tuple[int, int],
+        point_b: tuple[int, int],
+        t: float,
+    ) -> tuple[int, int]:
+        """
+        Trả về điểm nằm giữa point_a và point_b.
+
+        t = 0.0: point_a
+        t = 0.5: trung điểm
+        t = 1.0: point_b
+        """
+
+        return (
+            int(
+                point_a[0]
+                + (point_b[0] - point_a[0]) * t
+            ),
+            int(
+                point_a[1]
+                + (point_b[1] - point_a[1]) * t
+            ),
+        )
+        
+    def inset_diamond(
+        self,
+        top: tuple[int, int],
+        right: tuple[int, int],
+        bottom: tuple[int, int],
+        left: tuple[int, int],
+        scale: float,
+    ) -> list[tuple[int, int]]:
+        """
+        Thu nhỏ mặt hình thoi của tile về phía tâm.
+
+        scale = 1.0: giữ nguyên kích thước.
+        scale = 0.5: còn một nửa.
+        """
+
+        center_x = (
+            top[0] + right[0] + bottom[0] + left[0]
+        ) // 4
+
+        center_y = (
+            top[1] + right[1] + bottom[1] + left[1]
+        ) // 4
+
+        result: list[tuple[int, int]] = []
+
+        for x, y in (top, right, bottom, left):
+            result.append(
+                (
+                    center_x
+                    + int((x - center_x) * scale),
+                    center_y
+                    + int((y - center_y) * scale),
+                )
+            )
+
+        return result
+    
+    def is_bridge_open(
+        self,
+        board: Board,
+        r: int,
+        c: int,
+    ) -> bool:
+        """
+        Trả về True nếu bridge tại (r, c) đang mở.
+
+        Renderer chỉ đọc trạng thái, không thay đổi logic game.
+        """
+
+        rule_extension = getattr(
+            board,
+            "rule_extension",
+            None,
+        )
+
+        if rule_extension is None:
+            return False
+
+        bridge_states = getattr(
+            rule_extension,
+            "bridge_states",
+            {},
+        )
+
+        return bool(
+            bridge_states.get((r, c), False)
+        )
+    
+    def draw_fragile_overlay(
+        self,
+        surface: pygame.Surface,
+        top: tuple[int, int],
+        right: tuple[int, int],
+        bottom: tuple[int, int],
+        left: tuple[int, int],
+    ) -> None:
+        """
+        Vẽ các đường nứt đặc trưng của fragile tile.
+        """
+
+        center = (
+            (
+                top[0]
+                + right[0]
+                + bottom[0]
+                + left[0]
+            ) // 4,
+            (
+                top[1]
+                + right[1]
+                + bottom[1]
+                + left[1]
+            ) // 4,
+        )
+
+        main_cracks = [
+            self.lerp_point(top, right, 0.55),
+            self.lerp_point(right, bottom, 0.52),
+            self.lerp_point(bottom, left, 0.58),
+            self.lerp_point(left, top, 0.62),
+        ]
+
+        for end_point in main_cracks:
+            pygame.draw.line(
+                surface,
+                theme.COLOR_FRAGILE_CRACK,
+                center,
+                end_point,
+                width=2,
+            )
+
+        # Hai nhánh nứt nhỏ để tile trông tự nhiên hơn.
+        branch_1 = self.lerp_point(
+            center,
+            main_cracks[0],
+            0.55,
+        )
+
+        pygame.draw.line(
+            surface,
+            theme.COLOR_FRAGILE_CRACK,
+            branch_1,
+            (
+                branch_1[0] - 7,
+                branch_1[1] + 3,
+            ),
+            width=1,
+        )
+
+        branch_2 = self.lerp_point(
+            center,
+            main_cracks[2],
+            0.5,
+        )
+
+        pygame.draw.line(
+            surface,
+            theme.COLOR_FRAGILE_CRACK,
+            branch_2,
+            (
+                branch_2[0] + 8,
+                branch_2[1] - 3,
+            ),
+            width=1,
+        )
+        
+    def draw_soft_switch_overlay(
+        self,
+        surface: pygame.Surface,
+        top: tuple[int, int],
+        right: tuple[int, int],
+        bottom: tuple[int, int],
+        left: tuple[int, int],
+    ) -> None:
+        """
+        Vẽ soft switch thành nút áp lực tròn nổi.
+
+        Do mặt board là isometric nên hình tròn được vẽ thành ellipse.
+        """
+
+        center_x = (
+            top[0] + right[0] + bottom[0] + left[0]
+        ) // 4
+
+        center_y = (
+            top[1] + right[1] + bottom[1] + left[1]
+        ) // 4
+
+        switch_width = int(
+            theme.ISO_TILE_WIDTH * 0.46
+        )
+
+        switch_height = int(
+            theme.ISO_TILE_HEIGHT * 0.48
+        )
+
+        # Bóng/mặt bên của nút.
+        side_rect = pygame.Rect(
+            center_x - switch_width // 2,
+            center_y - switch_height // 2 + 4,
+            switch_width,
+            switch_height,
+        )
+
+        pygame.draw.ellipse(
+            surface,
+            theme.COLOR_SOFT_SWITCH_SIDE,
+            side_rect,
+        )
+
+        # Mặt trên.
+        top_rect = pygame.Rect(
+            center_x - switch_width // 2,
+            center_y - switch_height // 2,
+            switch_width,
+            switch_height,
+        )
+
+        pygame.draw.ellipse(
+            surface,
+            theme.COLOR_SOFT_SWITCH_TOP,
+            top_rect,
+        )
+
+        pygame.draw.ellipse(
+            surface,
+            theme.COLOR_SOFT_SWITCH_EDGE,
+            top_rect,
+            width=2,
+        )
+
+        # Vệt sáng nhỏ.
+        highlight_rect = top_rect.inflate(-9, -7)
+
+        pygame.draw.arc(
+            surface,
+            theme.COLOR_SOFT_SWITCH_HIGHLIGHT,
+            highlight_rect,
+            3.3,
+            5.7,
+            width=2,
+        )
+        
+    def draw_heavy_switch_overlay(
+        self,
+        surface: pygame.Surface,
+        top: tuple[int, int],
+        right: tuple[int, int],
+        bottom: tuple[int, int],
+        left: tuple[int, int],
+    ) -> None:
+        """
+        Vẽ heavy switch thành tấm kim loại hình chữ X.
+        """
+
+        inner = self.inset_diamond(
+            top,
+            right,
+            bottom,
+            left,
+            0.62,
+        )
+
+        (
+            inner_top,
+            inner_right,
+            inner_bottom,
+            inner_left,
+        ) = inner
+
+        # Bóng phía dưới.
+        pygame.draw.line(
+            surface,
+            theme.COLOR_HEAVY_SWITCH_EDGE,
+            (
+                inner_left[0],
+                inner_left[1] + 3,
+            ),
+            (
+                inner_right[0],
+                inner_right[1] + 3,
+            ),
+            width=9,
+        )
+
+        pygame.draw.line(
+            surface,
+            theme.COLOR_HEAVY_SWITCH_EDGE,
+            (
+                inner_top[0],
+                inner_top[1] + 3,
+            ),
+            (
+                inner_bottom[0],
+                inner_bottom[1] + 3,
+            ),
+            width=9,
+        )
+
+        # Thân chữ X.
+        pygame.draw.line(
+            surface,
+            theme.COLOR_HEAVY_SWITCH_TOP,
+            inner_left,
+            inner_right,
+            width=7,
+        )
+
+        pygame.draw.line(
+            surface,
+            theme.COLOR_HEAVY_SWITCH_TOP,
+            inner_top,
+            inner_bottom,
+            width=7,
+        )
+
+        # Highlight.
+        pygame.draw.line(
+            surface,
+            theme.COLOR_HEAVY_SWITCH_HIGHLIGHT,
+            inner_left,
+            inner_right,
+            width=2,
+        )
+        
+    def draw_closed_bridge(
+        self,
+        surface: pygame.Surface,
+        x: int,
+        y: int,
+    ) -> None:
+        """
+        Bridge đóng gần như là void hoàn toàn.
+
+        Chỉ vẽ hai bệ neo rất nhỏ ở hai đầu để người chơi
+        nhận ra đây là một bridge đang thu vào.
+        """
+
+        top, right, bottom, left = (
+            self.get_tile_points(x, y)
+        )
+
+        # Không vẽ mặt tile và cũng không vẽ hố đen.
+        # Background phía sau chính là khoảng trống.
+
+        # Bệ chứa bridge phía bên trái.
+        source_anchor = [
+            self.lerp_point(top, left, 0.60),
+            self.lerp_point(top, left, 0.92),
+            self.lerp_point(left, bottom, 0.08),
+            self.lerp_point(left, bottom, 0.40),
+        ]
+
+        # Dấu neo nhỏ ở đầu đối diện.
+        target_anchor = [
+            self.lerp_point(top, right, 0.72),
+            self.lerp_point(top, right, 0.92),
+            self.lerp_point(right, bottom, 0.08),
+            self.lerp_point(right, bottom, 0.28),
+        ]
+
+        pygame.draw.polygon(
+            surface,
+            theme.COLOR_BRIDGE_ANCHOR_TOP,
+            source_anchor,
+        )
+
+        pygame.draw.polygon(
+            surface,
+            theme.COLOR_BRIDGE_ANCHOR_EDGE,
+            source_anchor,
+            width=2,
+        )
+
+        pygame.draw.polygon(
+            surface,
+            theme.COLOR_BRIDGE_ANCHOR_TOP,
+            target_anchor,
+        )
+
+        pygame.draw.polygon(
+            surface,
+            theme.COLOR_BRIDGE_ANCHOR_EDGE,
+            target_anchor,
+            width=2,
+        )
+        
+    def draw_open_bridge(
+        self,
+        surface: pygame.Surface,
+        x: int,
+        y: int,
+        progress: float,
+    ) -> None:
+        """
+        Vẽ bridge trượt dần từ bệ bên trái sang đầu bên phải.
+
+        progress:
+            0.0 = thu hoàn toàn
+            1.0 = mở hoàn toàn
+        """
+
+        progress = max(
+            0.0,
+            min(1.0, progress),
+        )
+
+        top, right, bottom, left = (
+            self.get_tile_points(x, y)
+        )
+
+        # Luôn vẽ hai dấu neo.
+        self.draw_closed_bridge(
+            surface,
+            x,
+            y,
+        )
+
+        if progress <= 0.001:
+            return
+
+        # Bridge xuất phát từ cạnh top-left,
+        # sau đó chạy về phía right-bottom.
+        moving_top = self.lerp_point(
+            top,
+            right,
+            progress,
+        )
+
+        moving_bottom = self.lerp_point(
+            left,
+            bottom,
+            progress,
+        )
+
+        deck = [
+            top,
+            moving_top,
+            moving_bottom,
+            left,
+        ]
+
+        pygame.draw.polygon(
+            surface,
+            theme.COLOR_BRIDGE_DECK_TOP,
+            deck,
+        )
+
+        pygame.draw.polygon(
+            surface,
+            theme.COLOR_BRIDGE_DECK_EDGE,
+            deck,
+            width=2,
+        )
+
+        # Các đường chia tấm chỉ xuất hiện khi bridge đã chạy tới.
+        for fraction in (0.25, 0.50, 0.75):
+            if fraction > progress:
+                continue
+
+            point_a = self.lerp_point(
+                top,
+                right,
+                fraction,
+            )
+
+            point_b = self.lerp_point(
+                left,
+                bottom,
+                fraction,
+            )
+
+            pygame.draw.line(
+                surface,
+                theme.COLOR_BRIDGE_PLANK_LINE,
+                point_a,
+                point_b,
+                width=2,
+            )
+
+        # Hai rail chạy theo chiều dài bridge.
+        pygame.draw.line(
+            surface,
+            theme.COLOR_BRIDGE_METAL_DARK,
+            (top[0], top[1] + 3),
+            (moving_top[0], moving_top[1] + 3),
+            width=5,
+        )
+
+        pygame.draw.line(
+            surface,
+            theme.COLOR_BRIDGE_METAL_DARK,
+            (left[0], left[1] + 3),
+            (moving_bottom[0], moving_bottom[1] + 3),
+            width=5,
+        )
+
+        pygame.draw.line(
+            surface,
+            theme.COLOR_BRIDGE_METAL,
+            top,
+            moving_top,
+            width=3,
+        )
+
+        pygame.draw.line(
+            surface,
+            theme.COLOR_BRIDGE_METAL,
+            left,
+            moving_bottom,
+            width=3,
+        )
+        
+    

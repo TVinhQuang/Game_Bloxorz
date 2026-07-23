@@ -1,0 +1,39 @@
+{
+  "id": 12,
+  "name": "Soft Bridge Debug",
+  "difficulty": 6,
+  "category": "advanced",
+  "description": "A soft switch opens the bridge.",
+  "grid": [
+    "#########",
+    "#S.X.B.G#",
+    "#########"
+  ],
+  "legend": {
+    "#": "void",
+    ".": "floor",
+    "S": "start",
+    "G": "goal",
+    "X": "soft_switch",
+    "B": "bridge"
+  },
+  "bridges": [
+    {
+      "r": 1,
+      "c": 5,
+      "initially_open": false
+    }
+  ],
+  "switches": [
+    {
+      "r": 1,
+      "c": 3,
+      "type": "soft",
+      "effect": "open",
+      "targets": [
+        [1, 5]
+      ]
+    }
+  ],
+  "split": null
+}

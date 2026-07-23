@@ -1,0 +1,39 @@
+{
+  "id": 13,
+  "name": "Heavy Bridge Debug",
+  "difficulty": 7,
+  "category": "advanced",
+  "description": "The block must stand on the heavy switch.",
+  "grid": [
+    "#########",
+    "#S..OB.G#",
+    "#########"
+  ],
+  "legend": {
+    "#": "void",
+    ".": "floor",
+    "S": "start",
+    "G": "goal",
+    "O": "heavy_switch",
+    "B": "bridge"
+  },
+  "bridges": [
+    {
+      "r": 1,
+      "c": 5,
+      "initially_open": false
+    }
+  ],
+  "switches": [
+    {
+      "r": 1,
+      "c": 4,
+      "type": "heavy",
+      "effect": "open",
+      "targets": [
+        [1, 5]
+      ]
+    }
+  ],
+  "split": null
+}

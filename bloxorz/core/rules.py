@@ -10,12 +10,18 @@ from .state import BlockState
 
 @dataclass(frozen=True)
 class ValidationResult:
-    """
-    Kết quả kiểm tra một state có hợp lệ hay không.
-    """
-
+    # State có hợp lệ hay không.
     valid: bool
+
+    # Thông báo cho GUI.
     reason: str = ""
+
+    # Mã máy đọc để GUI chọn đúng hiệu ứng.
+    # Ví dụ:
+    # "unsupported"
+    # "fragile_break"
+    # "closed_bridge"
+    code: str = ""
 
 
 class RuleExtension(Protocol):
@@ -95,6 +101,15 @@ class RuleExtension(Protocol):
         """
 
         ...
+        
+    def reset(self) -> None:
+        """
+        Khôi phục trạng thái nội bộ của rule extension.
+
+        AdvancedRuleExtension dùng hàm này để đưa cầu
+        về trạng thái ban đầu khi restart level.
+        """
+        ...
 
 
 class NoOpRuleExtension:
@@ -132,3 +147,10 @@ class NoOpRuleExtension:
     ) -> float:
         # Core mặc định mỗi lần lăn có cost = 1.
         return 1.0
+    
+    def reset(self) -> None:
+        """
+        Core-only level không có trạng thái Advanced cần reset.
+        """
+
+        return None
